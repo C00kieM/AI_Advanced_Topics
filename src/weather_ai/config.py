@@ -40,6 +40,9 @@ class Settings:
     mosmix_product: str
     mosmix_base_url: str
     model_dir: Path
+    local_cache_path: Path
+    local_cache_retention_days: int
+    local_cache_sync_on_startup: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,6 +61,10 @@ class Settings:
             mosmix_product=os.getenv("MOSMIX_PRODUCT", "MOSMIX_L"),
             mosmix_base_url=os.getenv("MOSMIX_BASE_URL", "http://opendata.dwd.de").rstrip("/"),
             model_dir=Path(os.getenv("MODEL_DIR", ".weather-ai-models")),
+            local_cache_path=Path(os.getenv("LOCAL_CACHE_PATH", "data/local_weather_history.csv")),
+            local_cache_retention_days=int(os.getenv("LOCAL_CACHE_RETENTION_DAYS", "1095")),
+            local_cache_sync_on_startup=os.getenv("LOCAL_CACHE_SYNC_ON_STARTUP", "true").lower()
+            in {"1", "true", "yes", "on"},
         )
 
     @property

@@ -9,6 +9,7 @@ Das Projekt soll beantworten, wie sich eine DWD-Wetterprognose am konkreten loka
 Der erste lauffaehige MVP ist eine End-to-end-Demo:
 
 - lokale Messdaten aus InfluxDB lesen
+- lokale 3-Jahres-CSV-DB fuer alle `wetterdaten-*` Measurements synchronisieren
 - DWD-MOSMIX-Prognosen abrufen, aus KMZ/KML parsen und archivieren
 - Datenstatus und veraltete Sensorwerte sichtbar melden
 - DWD-Prognosen zeitlich mit lokalen Ist-Werten vergleichen
@@ -19,6 +20,7 @@ Der erste lauffaehige MVP ist eine End-to-end-Demo:
 ## Erfolgskriterien
 
 - `weather-chat status` erkennt InfluxDB und DWD und meldet klar, wenn lokale Wetterdaten veraltet sind.
+- `weather-chat sync-local-db` schreibt eine lokale CSV mit maximal 3 Jahren Wetterstationshistorie.
 - `weather-chat ingest-dwd` archiviert MOSMIX- oder Fallback-DWD-Prognosen mit Ausgabezeitpunkt und Gueltigkeitszeitpunkt.
 - `weather-chat compare` kann Forecast-vs-Ist-Paare zeigen, sobald archivierte Prognosen und lokale Messwerte ueberlappen.
 - `weather-chat train` bewertet lokale Korrekturmodelle gegen die rohe DWD-Prognose mit MAE/RMSE.

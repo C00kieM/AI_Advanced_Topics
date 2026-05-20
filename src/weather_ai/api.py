@@ -5,6 +5,7 @@ from dataclasses import asdict
 from .chat import ChatService
 from .config import Settings
 from .diagnostics import build_status
+from .local_cache import sync_cache_on_startup
 from .service import WeatherService
 
 
@@ -31,6 +32,12 @@ def create_app():
     service = WeatherService(settings)
     chat_service = ChatService(settings)
     api = FastAPI(title="Wetter-KI MVP", version="0.1.0")
+    try:
+        api.state.local_cache_sync_result = sync_cache_on_startup(settings)
+        api.state.local_cache_sync_error = None
+    except Exception as exc:  # noqa: BLE001 - API should still start if cache sync fails.
+        api.state.local_cache_sync_result = None
+        api.state.local_cache_sync_error = str(exc)
 
     @api.get("/health")
     def health():
@@ -40,6 +47,7 @@ def create_app():
             "influx_ok": status.influx_ok,
             "dwd_ok": status.dwd_ok,
             "warnings": status.warnings,
+            "local_cache_error": api.state.local_cache_sync_error,
         }
 
     @api.get("/local/latest")

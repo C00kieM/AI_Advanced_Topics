@@ -23,11 +23,28 @@ Danach `.env` lokal ausfuellen. Der InfluxDB-Token gehoert nur in `.env` und nie
 
 ```powershell
 weather-chat status
+weather-chat sync-local-db
 weather-chat chat
 uvicorn weather_ai.api:app --reload
 ```
 
 Der Chat funktioniert ohne LLM-Provider. Er nutzt lokale Messdaten, DWD-Prognosen und den ML-/Datenstatus, um eine nachvollziehbare Antwort zu erzeugen.
+
+## Lokale CSV-DB
+
+Beim Programmstart synchronisiert der MVP eine lokale CSV-Datei mit allen `wetterdaten-*` Measurements aus InfluxDB:
+
+```powershell
+LOCAL_CACHE_PATH=data/local_weather_history.csv
+LOCAL_CACHE_RETENTION_DAYS=1095
+LOCAL_CACHE_SYNC_ON_STARTUP=true
+```
+
+Die CSV enthaelt `time`, `measurement`, `field` und `value`. Bei jedem Start werden Zeilen aelter als 3 Jahre entfernt und neue InfluxDB-Zeilen seit dem letzten Cache-Zeitpunkt ergaenzt. Manuell kann der Sync so gestartet werden:
+
+```powershell
+weather-chat sync-local-db
+```
 
 ## DWD MOSMIX
 

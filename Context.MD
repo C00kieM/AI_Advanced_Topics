@@ -35,6 +35,15 @@ Gefundene Felder fuer `wetterdaten-gl-fw-1`:
 
 Bei der Planung wurde festgestellt, dass `wetterdaten-gl-fw-1` zuletzt am 16.04.2026 Werte geliefert hat. Die Diagnose hat danach `wetterdaten-gl-fw-2` als aktuellere lokale Quelle gefunden; lokal ist deshalb `LOCAL_MEASUREMENT=wetterdaten-gl-fw-2` gesetzt. Die Implementierung enthaelt weiterhin eine Diagnosefunktion, die veraltete lokale Daten explizit meldet und alternative Wetter-Measurements pruefbar macht.
 
+## Lokale CSV-DB
+
+Der MVP pflegt lokal `data/local_weather_history.csv` als kleine Rolling-Window-Datenbank fuer alle InfluxDB-Measurements mit Prefix `wetterdaten-`. Beim Start wird die Datei synchronisiert:
+
+- Zeilen aelter als `LOCAL_CACHE_RETENTION_DAYS=1095` werden entfernt.
+- Neue InfluxDB-Zeilen seit dem letzten Cache-Zeitpunkt werden ergaenzt.
+- Duplikate werden ueber `time`, `measurement` und `field` zusammengefuehrt.
+- Die Datei ist lokal und wird nicht versioniert.
+
 ## DWD-Datenquelle
 
 Primaere MVP-Quelle ist DWD OpenData MOSMIX ueber `MOSMIX_STATION_ID`, `MOSMIX_PRODUCT` und `MOSMIX_BASE_URL`. Der Client laedt die aktuelle KMZ-Datei einer Einzelstation, extrahiert das KML und erzeugt daraus `ForecastPoint`s.

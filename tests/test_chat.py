@@ -22,6 +22,9 @@ def test_chat_answer_is_rule_based_without_llm_provider():
         mosmix_product="MOSMIX_L",
         mosmix_base_url="http://opendata.dwd.de",
         model_dir=Path(".tmp-test-models"),
+        local_cache_path=Path("data/local_weather_history.csv"),
+        local_cache_retention_days=1095,
+        local_cache_sync_on_startup=False,
     )
     report = StatusReport(
         influx_ok=True,

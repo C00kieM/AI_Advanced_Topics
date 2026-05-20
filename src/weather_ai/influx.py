@@ -36,7 +36,7 @@ class InfluxClient:
         self.settings = settings
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def query_csv(self, flux: str) -> list[dict[str, str]]:
+    def query_csv(self, flux: str, timeout: int = 15) -> list[dict[str, str]]:
         if not self.settings.has_influx_credentials:
             raise InfluxError("InfluxDB credentials are incomplete. Check .env.")
         url = (
@@ -54,7 +54,7 @@ class InfluxClient:
             },
         )
         try:
-            with self._opener.open(request, timeout=15) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 payload = response.read().decode("utf-8-sig")
         except urllib.error.URLError as exc:
             raise InfluxError(f"InfluxDB query failed: {exc}") from exc
@@ -164,6 +164,10 @@ class InfluxClient:
             )
         return observations
 
+    def weather_station_rows_since(self, start: datetime) -> list[dict[str, str]]:
+        flux = weather_station_rows_since_flux(self.settings.influx_bucket, start)
+        return self.query_csv(flux, timeout=120)
+
 
 def latest_observations_flux(bucket: str, measurement: str, days: int) -> str:
     return f'''
@@ -206,6 +210,16 @@ from(bucket: "{bucket}")
   |> filter(fn: (r) => r["_measurement"] == "{measurement}")
   |> filter(fn: (r) => {filter_expr})
   |> keep(columns: ["_measurement", "_time", "_field", "_value"])
+'''.strip()
+
+
+def weather_station_rows_since_flux(bucket: str, start: datetime) -> str:
+    start_iso = start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    return f'''
+from(bucket: "{bucket}")
+  |> range(start: time(v: "{start_iso}"))
+  |> filter(fn: (r) => r["_measurement"] =~ /^wetterdaten-/)
+  |> keep(columns: ["_time", "_measurement", "_field", "_value"])
 '''.strip()
 
 
