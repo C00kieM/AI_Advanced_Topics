@@ -49,6 +49,8 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+pytest-cache-files-*/
+.pytest-tmp/
 cover/
 
 # Translations
@@ -205,6 +207,10 @@ tempCodeRunnerFile.py
 
 # Ruff stuff:
 .ruff_cache/
+
+# Wetter-KI local artifacts
+.weather-ai-models/
+.tmp-test-models/
 
 # PyPI configuration file
 .pypirc
