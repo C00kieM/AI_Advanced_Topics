@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
 from .dwd import DwdClient
+from .forecast_archive import ForecastCsvArchive
 from .influx import InfluxClient
 from .ml import train_models
 from .models import ForecastPoint, LocalObservation
@@ -17,6 +16,7 @@ class WeatherService:
         self.influx = InfluxClient(settings)
         self.dwd = DwdClient(settings)
         self.mosmix = MosmixClient(settings)
+        self.forecast_archive = ForecastCsvArchive(settings)
 
     def latest_local(self) -> list[LocalObservation]:
         return self.influx.latest_observations()
@@ -26,13 +26,18 @@ class WeatherService:
             return self.mosmix.fetch_forecasts()
         return self.dwd.fetch_forecasts()
 
-    def ingest_dwd(self) -> dict[str, int | str]:
+    def archive_dwd_forecast(self) -> dict[str, int | str]:
         forecasts = self.current_forecast()
-        written = self.influx.write_forecasts(forecasts)
-        return {"fetched": len(forecasts), "written": written, "at": datetime.now(timezone.utc).isoformat()}
+        result = self.forecast_archive.append(forecasts)
+        return {
+            "fetched": result.fetched,
+            "written_rows": result.written_rows,
+            "path": str(result.path),
+            "at": result.at.isoformat(),
+        }
 
     def latest_comparison_summary(self) -> dict[str, object]:
-        forecasts = self.influx.archived_forecasts(since_days=30)
+        forecasts = self.forecast_archive.read()
         observations = self.influx.local_rows_for_training(since_days=30)
         comparisons = match_forecasts_to_observations(forecasts, observations)
         return {
@@ -41,7 +46,7 @@ class WeatherService:
         }
 
     def train(self) -> dict[str, object]:
-        forecasts = self.influx.archived_forecasts(since_days=30)
+        forecasts = self.forecast_archive.read()
         observations = self.influx.local_rows_for_training(since_days=30)
         comparisons = match_forecasts_to_observations(forecasts, observations)
         result = train_models(comparisons, self.settings.model_dir)

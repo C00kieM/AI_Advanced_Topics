@@ -43,6 +43,13 @@ class Settings:
     local_cache_path: Path
     local_cache_retention_days: int
     local_cache_sync_on_startup: bool
+    dwd_cdc_base_url: str
+    dwd_historical_station_ids: list[str]
+    dwd_historical_resolution: str
+    dwd_historical_parameters: list[str]
+    dwd_historical_retention_days: int
+    dwd_historical_cache_path: Path
+    forecast_archive_path: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -65,6 +72,21 @@ class Settings:
             local_cache_retention_days=int(os.getenv("LOCAL_CACHE_RETENTION_DAYS", "1095")),
             local_cache_sync_on_startup=os.getenv("LOCAL_CACHE_SYNC_ON_STARTUP", "true").lower()
             in {"1", "true", "yes", "on"},
+            dwd_cdc_base_url=os.getenv("DWD_CDC_BASE_URL", "http://opendata.dwd.de/climate_environment/CDC").rstrip("/"),
+            dwd_historical_station_ids=[
+                item.strip().zfill(5)
+                for item in os.getenv("DWD_HISTORICAL_STATION_IDS", "02667").split(",")
+                if item.strip()
+            ],
+            dwd_historical_resolution=os.getenv("DWD_HISTORICAL_RESOLUTION", "10_minutes"),
+            dwd_historical_parameters=[
+                item.strip()
+                for item in os.getenv("DWD_HISTORICAL_PARAMETERS", "air_temperature,precipitation,wind").split(",")
+                if item.strip()
+            ],
+            dwd_historical_retention_days=int(os.getenv("DWD_HISTORICAL_RETENTION_DAYS", "1095")),
+            dwd_historical_cache_path=Path(os.getenv("DWD_HISTORICAL_CACHE_PATH", "data/dwd_historical_weather.csv")),
+            forecast_archive_path=Path(os.getenv("FORECAST_ARCHIVE_PATH", "data/dwd_forecast_archive.csv")),
         )
 
     @property

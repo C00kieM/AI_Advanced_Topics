@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from datetime import datetime, timezone
 import csv
 import io
@@ -9,10 +8,14 @@ import urllib.parse
 import urllib.request
 
 from .config import Settings
-from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation
+from .models import LOCAL_FIELD_MAP, LocalObservation
 
 
 class InfluxError(RuntimeError):
+    pass
+
+
+class InfluxWriteBlockedError(InfluxError):
     pass
 
 
@@ -27,14 +30,15 @@ def _to_number(value: str) -> float | str:
         return value
 
 
-def escape_line_protocol(value: str) -> str:
-    return value.replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
-
-
 class InfluxClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def _open(self, request: urllib.request.Request, timeout: int):
+        if "/api/v2/write" in request.full_url:
+            raise InfluxWriteBlockedError("InfluxDB writes are blacklisted. This app may only read from InfluxDB.")
+        return self._opener.open(request, timeout=timeout)
 
     def query_csv(self, flux: str, timeout: int = 15) -> list[dict[str, str]]:
         if not self.settings.has_influx_credentials:
@@ -54,7 +58,7 @@ class InfluxClient:
             },
         )
         try:
-            with self._opener.open(request, timeout=timeout) as response:
+            with self._open(request, timeout=timeout) as response:
                 payload = response.read().decode("utf-8-sig")
         except urllib.error.URLError as exc:
             raise InfluxError(f"InfluxDB query failed: {exc}") from exc
@@ -90,64 +94,14 @@ class InfluxClient:
             result[measurement] = _parse_time(rows[0]["_time"]) if rows else None
         return result
 
-    def write_forecasts(self, forecasts: Iterable[ForecastPoint], measurement: str = "dwd_forecast") -> int:
-        lines = [forecast_to_line_protocol(item, measurement) for item in forecasts]
-        payload = "\n".join(line for line in lines if line)
-        if not payload:
-            return 0
-        url = (
-            f"{self.settings.influx_url}/api/v2/write?"
-            + urllib.parse.urlencode(
-                {
-                    "org": self.settings.influx_org,
-                    "bucket": self.settings.influx_bucket,
-                    "precision": "ns",
-                }
-            )
-        )
-        request = urllib.request.Request(
-            url=url,
-            data=payload.encode("utf-8"),
-            method="POST",
-            headers={
-                "Authorization": f"Token {self.settings.influx_token}",
-                "Content-Type": "text/plain; charset=utf-8",
-            },
-        )
-        try:
-            with self._opener.open(request, timeout=15):
-                return len(lines)
-        except urllib.error.URLError as exc:
-            raise InfluxError(f"InfluxDB write failed: {exc}") from exc
+    def write_forecasts(self, *args, **kwargs) -> int:  # noqa: ARG002
+        raise InfluxWriteBlockedError("InfluxDB writes are blacklisted. This app may only read from InfluxDB.")
 
     def forecast_rows(self, since_days: int = 30) -> list[dict[str, str]]:
-        flux = forecast_rows_flux(self.settings.influx_bucket, since_days)
-        return self.query_csv(flux)
+        raise InfluxWriteBlockedError("DWD forecast archives must be read from local CSV, not InfluxDB.")
 
-    def archived_forecasts(self, since_days: int = 30) -> list[ForecastPoint]:
-        rows = self.forecast_rows(since_days)
-        forecasts: list[ForecastPoint] = []
-        for row in rows:
-            try:
-                value = float(row.get("_value", ""))
-                valid_at = _parse_time(row["_time"])
-                issued_at = _parse_time(row.get("issued_at", ""))
-                horizon_hours = float(row.get("horizon_hours", "0"))
-            except (KeyError, TypeError, ValueError):
-                continue
-            forecasts.append(
-                ForecastPoint(
-                    source=row.get("source", "dwd.api.bund.dev"),
-                    station_id=row.get("station_id", ""),
-                    variable=row.get("variable", row.get("_field", "")),
-                    value=value,
-                    issued_at=issued_at,
-                    valid_at=valid_at,
-                    horizon_hours=horizon_hours,
-                    raw_name=row.get("raw_name", ""),
-                )
-            )
-        return forecasts
+    def archived_forecasts(self, since_days: int = 30) -> list[object]:  # noqa: ARG002
+        raise InfluxWriteBlockedError("DWD forecast archives must be read from local CSV, not InfluxDB.")
 
     def local_rows_for_training(self, since_days: int = 30) -> list[LocalObservation]:
         flux = local_training_rows_flux(self.settings.influx_bucket, self.settings.local_measurement, since_days)
@@ -191,16 +145,6 @@ from(bucket: "{bucket}")
 '''.strip()
 
 
-def forecast_rows_flux(bucket: str, since_days: int) -> str:
-    return f'''
-from(bucket: "{bucket}")
-  |> range(start: -{since_days}d)
-  |> filter(fn: (r) => r["_measurement"] == "dwd_forecast")
-  |> filter(fn: (r) => r["_field"] == "value")
-  |> keep(columns: ["_time", "_field", "_value", "station_id", "variable", "issued_at", "horizon_hours", "source", "raw_name"])
-'''.strip()
-
-
 def local_training_rows_flux(bucket: str, measurement: str, since_days: int) -> str:
     fields = list(LOCAL_FIELD_MAP.values())
     filter_expr = " or ".join([f'r["_field"] == "{field}"' for field in fields])
@@ -221,21 +165,3 @@ from(bucket: "{bucket}")
   |> filter(fn: (r) => r["_measurement"] =~ /^wetterdaten-/)
   |> keep(columns: ["_time", "_measurement", "_field", "_value"])
 '''.strip()
-
-
-def forecast_to_line_protocol(forecast: ForecastPoint, measurement: str) -> str:
-    tags = ",".join(
-        [
-            f"source={escape_line_protocol(forecast.source)}",
-            f"station_id={escape_line_protocol(forecast.station_id or 'unknown')}",
-            f"variable={escape_line_protocol(forecast.variable)}",
-            f"issued_at={escape_line_protocol(forecast.issued_at.isoformat())}",
-            f"horizon_hours={escape_line_protocol(f'{forecast.horizon_hours:.3f}')}",
-            f"raw_name={escape_line_protocol(forecast.raw_name or forecast.variable)}",
-        ]
-    )
-    timestamp = int(forecast.valid_at.timestamp() * 1_000_000_000)
-    return (
-        f"{escape_line_protocol(measurement)},{tags} "
-        f"value={forecast.value} {timestamp}"
-    )

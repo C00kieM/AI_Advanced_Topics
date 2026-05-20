@@ -211,8 +211,14 @@ tempCodeRunnerFile.py
 # Wetter-KI local artifacts
 .weather-ai-models/
 .tmp-test-models/
+.tmp-test-forecast-archive*.csv
+.tmp-test-forecast-archive*.csv.tmp
 data/local_weather_history.csv
 data/local_weather_history.csv.tmp
+data/dwd_historical_weather.csv
+data/dwd_historical_weather.csv.tmp
+data/dwd_forecast_archive.csv
+data/dwd_forecast_archive.csv.tmp
 
 # PyPI configuration file
 .pypirc

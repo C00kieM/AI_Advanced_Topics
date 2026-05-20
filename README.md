@@ -24,6 +24,8 @@ Danach `.env` lokal ausfuellen. Der InfluxDB-Token gehoert nur in `.env` und nie
 ```powershell
 weather-chat status
 weather-chat sync-local-db
+weather-chat sync-dwd-history
+weather-chat archive-dwd-forecast
 weather-chat chat
 uvicorn weather_ai.api:app --reload
 ```
@@ -45,6 +47,37 @@ Die CSV enthaelt `time`, `measurement`, `field` und `value`. Bei jedem Start wer
 ```powershell
 weather-chat sync-local-db
 ```
+
+## Historische DWD CDC-Daten
+
+Der MVP kann historische DWD-CDC-Messwerte fuer Temperatur, Niederschlag und Wind lokal als lange CSV ablegen:
+
+```powershell
+DWD_CDC_BASE_URL=http://opendata.dwd.de/climate_environment/CDC
+DWD_HISTORICAL_STATION_IDS=02667
+DWD_HISTORICAL_RESOLUTION=10_minutes
+DWD_HISTORICAL_PARAMETERS=air_temperature,precipitation,wind
+DWD_HISTORICAL_RETENTION_DAYS=1095
+DWD_HISTORICAL_CACHE_PATH=data/dwd_historical_weather.csv
+```
+
+Manueller Sync:
+
+```powershell
+weather-chat sync-dwd-history
+```
+
+Die CSV enthaelt `time`, `station_id`, `dataset`, `field`, `value`, `quality` und `source_url`. Die Struktur ist bewusst Influx-kompatibel gehalten: `dataset`/`station_id` koennen Tags sein, `field` der Messwertname und `time` der Influx-Zeitstempel.
+
+## InfluxDB ist Read-only
+
+Diese App schreibt niemals in InfluxDB. InfluxDB wird nur gelesen. DWD-Prognosen werden lokal in `data/dwd_forecast_archive.csv` archiviert:
+
+```powershell
+weather-chat archive-dwd-forecast
+```
+
+Der alte Influx-Write-Pfad ist im Code hart blockiert. Auch versehentliche Aufrufe von `InfluxClient.write_forecasts(...)` werfen sofort einen Fehler.
 
 ## DWD MOSMIX
 

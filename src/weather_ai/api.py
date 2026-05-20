@@ -5,6 +5,7 @@ from dataclasses import asdict
 from .chat import ChatService
 from .config import Settings
 from .diagnostics import build_status
+from .dwd_historical import DwdHistoricalCsvStore
 from .local_cache import sync_cache_on_startup
 from .service import WeatherService
 
@@ -66,13 +67,24 @@ def create_app():
     def chat(request: ChatRequest):
         return {"answer": chat_service.answer(request.question)}
 
-    @api.post("/jobs/ingest-dwd")
-    def ingest_dwd():
-        return service.ingest_dwd()
+    @api.post("/jobs/archive-dwd-forecast")
+    def archive_dwd_forecast():
+        return service.archive_dwd_forecast()
 
     @api.post("/jobs/train")
     def train():
         return service.train()
+
+    @api.post("/jobs/sync-dwd-history")
+    def sync_dwd_history():
+        result = DwdHistoricalCsvStore(settings).sync()
+        return {
+            "path": str(result.path),
+            "station_ids": result.station_ids,
+            "fetched_records": result.fetched_records,
+            "written_rows": result.written_rows,
+            "cutoff": result.cutoff.isoformat(),
+        }
 
     return api
 

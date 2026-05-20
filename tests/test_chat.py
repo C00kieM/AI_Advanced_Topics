@@ -25,6 +25,13 @@ def test_chat_answer_is_rule_based_without_llm_provider():
         local_cache_path=Path("data/local_weather_history.csv"),
         local_cache_retention_days=1095,
         local_cache_sync_on_startup=False,
+        dwd_cdc_base_url="http://opendata.dwd.de/climate_environment/CDC",
+        dwd_historical_station_ids=["02667"],
+        dwd_historical_resolution="10_minutes",
+        dwd_historical_parameters=["air_temperature", "precipitation", "wind"],
+        dwd_historical_retention_days=1095,
+        dwd_historical_cache_path=Path("data/dwd_historical_weather.csv"),
+        forecast_archive_path=Path("data/dwd_forecast_archive.csv"),
     )
     report = StatusReport(
         influx_ok=True,

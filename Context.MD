@@ -6,6 +6,7 @@
 - Sprache/Stack: Python 3.11+, FastAPI, Typer CLI, scikit-learn
 - Zielbetrieb: lokaler Server im Netzwerk der Wetterstation und InfluxDB
 - Secrets: ausschliesslich lokal ueber `.env`; keine Tokens in Code, Doku oder Git
+- InfluxDB ist fuer diese App strikt read-only. Es duerfen niemals Daten in InfluxDB geschrieben werden.
 
 ## InfluxDB
 
@@ -44,6 +45,19 @@ Der MVP pflegt lokal `data/local_weather_history.csv` als kleine Rolling-Window-
 - Duplikate werden ueber `time`, `measurement` und `field` zusammengefuehrt.
 - Die Datei ist lokal und wird nicht versioniert.
 
+## Historische DWD CDC-Daten
+
+Der `DwdHistoricalClient` laedt historische DWD-CDC-ZIP-Dateien aus `observations_germany/climate`, entpackt die Produkt-Textdateien und schreibt eine lange CSV nach `data/dwd_historical_weather.csv`.
+
+Lokaler Default:
+
+- Station: `02667` Koeln/Bonn
+- Aufloesung: `10_minutes`
+- Parameter: `air_temperature`, `precipitation`, `wind`
+- Retention: 1095 Tage
+
+Die CSV-Spalten sind `time`, `station_id`, `dataset`, `field`, `value`, `quality`, `source_url`.
+
 ## DWD-Datenquelle
 
 Primaere MVP-Quelle ist DWD OpenData MOSMIX ueber `MOSMIX_STATION_ID`, `MOSMIX_PRODUCT` und `MOSMIX_BASE_URL`. Der Client laedt die aktuelle KMZ-Datei einer Einzelstation, extrahiert das KML und erzeugt daraus `ForecastPoint`s.
@@ -70,6 +84,10 @@ Referenzen:
 - https://www.dwd.de/EN/ourservices/met_application_mosmix/met_application_mosmix.html
 - https://www.dwd.de/EN/ourservices/met_application_mosmix/mosmix_kml_format_description.pdf?__blob=publicationFile&v=4
 - https://www.dwd.de/DE/leistungen/met_verfahren_mosmix/mosmix_parameteruebersicht.pdf?__blob=publicationFile&v=4
+
+## Lokales Forecast-Archiv
+
+DWD/MOSMIX-Prognosen werden nicht in InfluxDB gespeichert. Sie werden lokal in `data/dwd_forecast_archive.csv` archiviert. Dadurch bleibt InfluxDB ausschliesslich Quelle fuer lokale Wetterstationsdaten.
 
 ## Chatbot
 
