@@ -4,7 +4,8 @@ from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
 from .dwd import DwdClient
 from .forecast_archive import ForecastCsvArchive
-from .influx import InfluxClient
+from .influx import InfluxClient, InfluxError
+from .local_cache import WeatherStationCsvCache
 from .ml import train_models
 from .models import ForecastPoint, LocalObservation
 from .mosmix import MosmixClient
@@ -17,6 +18,7 @@ class WeatherService:
         self.dwd = DwdClient(settings)
         self.mosmix = MosmixClient(settings)
         self.forecast_archive = ForecastCsvArchive(settings)
+        self.local_cache = WeatherStationCsvCache(settings)
 
     def latest_local(self) -> list[LocalObservation]:
         return self.influx.latest_observations()
@@ -38,7 +40,7 @@ class WeatherService:
 
     def latest_comparison_summary(self) -> dict[str, object]:
         forecasts = self.forecast_archive.read()
-        observations = self.influx.local_rows_for_training(since_days=30)
+        observations = self._local_training_rows(since_days=30)
         comparisons = match_forecasts_to_observations(forecasts, observations)
         return {
             "pairs": len(comparisons),
@@ -47,7 +49,7 @@ class WeatherService:
 
     def train(self) -> dict[str, object]:
         forecasts = self.forecast_archive.read()
-        observations = self.influx.local_rows_for_training(since_days=30)
+        observations = self._local_training_rows(since_days=30)
         comparisons = match_forecasts_to_observations(forecasts, observations)
         result = train_models(comparisons, self.settings.model_dir)
         return {
@@ -56,3 +58,9 @@ class WeatherService:
             "metrics": result.metrics,
             "model_paths": result.model_paths,
         }
+
+    def _local_training_rows(self, since_days: int) -> list[LocalObservation]:
+        try:
+            return self.influx.local_rows_for_training(since_days=since_days)
+        except InfluxError:
+            return self.local_cache.observations_since(days=since_days)

@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.111",
   "uvicorn[standard]>=0.30",
+  "pywebview>=5.0",
   "typer>=0.12",
   "scikit-learn>=1.5",
   "joblib>=1.4",
@@ -23,9 +24,13 @@ dev = [
 
 [project.scripts]
 weather-chat = "weather_ai.cli:main"
+weather-gui = "weather_ai.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+weather_ai = ["static/*.html", "static/*.css", "static/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

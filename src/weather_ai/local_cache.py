@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import csv
-import shutil
 
 from .config import Settings
 from .influx import InfluxClient, _parse_time
+from .models import LocalObservation
 
 
 CACHE_COLUMNS = ["time", "measurement", "field", "value"]
@@ -47,6 +47,23 @@ class WeatherStationCsvCache:
             started_at=started_at,
         )
 
+    def observations_since(self, days: int) -> list[LocalObservation]:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        observations: list[LocalObservation] = []
+        for row in read_cache_rows(self.path):
+            row_time = _row_time(row)
+            if row_time is None or row_time < cutoff:
+                continue
+            observations.append(
+                LocalObservation(
+                    measurement=row["measurement"],
+                    field=row["field"],
+                    value=_to_number(row["value"]),
+                    time=row_time,
+                )
+            )
+        return observations
+
 
 def sync_cache_on_startup(settings: Settings) -> CacheSyncResult | None:
     if not settings.local_cache_sync_on_startup:
@@ -70,19 +87,10 @@ def read_cache_rows(path: Path) -> list[dict[str, str]]:
 
 def write_cache_rows(path: Path, rows: list[dict[str, str]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="") as handle:
+    with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=CACHE_COLUMNS)
         writer.writeheader()
         writer.writerows(rows)
-    try:
-        temp_path.replace(path)
-    except PermissionError:
-        shutil.copyfile(temp_path, path)
-        try:
-            temp_path.unlink(missing_ok=True)
-        except PermissionError:
-            pass
 
 
 def prune_rows(rows: list[dict[str, str]], cutoff: datetime) -> list[dict[str, str]]:
@@ -138,3 +146,10 @@ def _row_time(row: dict[str, str]) -> datetime | None:
         return _parse_time(value)
     except ValueError:
         return None
+
+
+def _to_number(value: str) -> float | str:
+    try:
+        return float(value)
+    except ValueError:
+        return value

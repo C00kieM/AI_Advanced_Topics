@@ -3,24 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-import csv
-import shutil
 
 from .config import Settings
+from .dwd_data import DWD_DATA_COLUMNS, merge_dwd_rows, read_dwd_rows, write_dwd_rows
 from .models import ForecastPoint
 
 
-FORECAST_COLUMNS = [
-    "source",
-    "station_id",
-    "variable",
-    "value",
-    "issued_at",
-    "valid_at",
-    "horizon_hours",
-    "unit",
-    "raw_name",
-]
+FORECAST_COLUMNS = DWD_DATA_COLUMNS
 
 
 @dataclass(frozen=True)
@@ -33,16 +22,19 @@ class ForecastArchiveResult:
 
 class ForecastCsvArchive:
     def __init__(self, settings: Settings):
-        self.path = settings.forecast_archive_path
+        self.path = settings.dwd_data_path
 
     def append(self, forecasts: list[ForecastPoint]) -> ForecastArchiveResult:
-        existing = read_forecast_rows(self.path)
-        merged = merge_forecast_rows(existing, [forecast_to_row(item) for item in forecasts])
-        write_forecast_rows(self.path, merged)
+        existing = read_dwd_rows(self.path)
+        forecast_rows = [row for row in existing if row.get("kind") == "forecast"]
+        preserved_rows = [row for row in existing if row.get("kind") != "forecast"]
+        merged_forecasts = merge_forecast_rows(forecast_rows, [forecast_to_row(item) for item in forecasts])
+        merged = merge_dwd_rows([*preserved_rows, *merged_forecasts])
+        write_dwd_rows(self.path, merged)
         return ForecastArchiveResult(
             path=self.path,
             fetched=len(forecasts),
-            written_rows=len(merged),
+            written_rows=len(merged_forecasts),
             at=datetime.now(timezone.utc),
         )
 
@@ -51,48 +43,32 @@ class ForecastCsvArchive:
 
 
 def read_forecast_rows(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        return [
-            {column: row.get(column, "") for column in FORECAST_COLUMNS}
-            for row in reader
-            if row.get("valid_at") and row.get("variable")
-        ]
+    return [row for row in read_dwd_rows(path) if row.get("kind") == "forecast" and row.get("valid_at")]
 
 
 def write_forecast_rows(path: Path, rows: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FORECAST_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
-    try:
-        temp_path.replace(path)
-    except PermissionError:
-        shutil.copyfile(temp_path, path)
-        try:
-            temp_path.unlink(missing_ok=True)
-        except PermissionError:
-            pass
+    write_dwd_rows(path, merge_dwd_rows(rows))
 
 
 def merge_forecast_rows(existing_rows: list[dict[str, str]], new_rows: list[dict[str, str]]) -> list[dict[str, str]]:
     merged: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
     for row in [*existing_rows, *new_rows]:
-        key = (row["source"], row["station_id"], row["variable"], row["issued_at"], row["valid_at"])
+        key = (row["source"], row["station_id"], row["field"], row["issued_at"], row["valid_at"])
         merged[key] = {column: row.get(column, "") for column in FORECAST_COLUMNS}
-    return sorted(merged.values(), key=lambda row: (row["issued_at"], row["valid_at"], row["station_id"], row["variable"]))
+    return sorted(merged.values(), key=lambda row: (row["issued_at"], row["valid_at"], row["station_id"], row["field"]))
 
 
 def forecast_to_row(forecast: ForecastPoint) -> dict[str, str]:
     return {
+        "kind": "forecast",
+        "time": forecast.valid_at.isoformat(),
         "source": forecast.source,
         "station_id": forecast.station_id,
-        "variable": forecast.variable,
+        "dataset": "forecast",
+        "field": forecast.variable,
         "value": f"{forecast.value:g}",
+        "quality": "",
+        "source_url": "",
         "issued_at": forecast.issued_at.isoformat(),
         "valid_at": forecast.valid_at.isoformat(),
         "horizon_hours": f"{forecast.horizon_hours:g}",
@@ -105,7 +81,7 @@ def row_to_forecast(row: dict[str, str]) -> ForecastPoint:
     return ForecastPoint(
         source=row.get("source", ""),
         station_id=row.get("station_id", ""),
-        variable=row.get("variable", ""),
+        variable=row.get("field", ""),
         value=float(row.get("value", "nan")),
         issued_at=_parse_time(row.get("issued_at", "")),
         valid_at=_parse_time(row.get("valid_at", "")),

@@ -1,6 +1,10 @@
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from weather_ai.local_cache import latest_row_time, merge_rows, normalize_influx_rows, prune_rows
+from weather_ai.local_cache import WeatherStationCsvCache
+from weather_ai.config import Settings
 
 
 def test_normalize_influx_rows_maps_weather_values():
@@ -52,3 +56,14 @@ def test_merge_rows_prunes_old_rows_and_deduplicates_newer_values():
     assert merged[0]["value"] == "2"
     assert latest_row_time(merged) == datetime(2026, 5, 20, 9, 15, tzinfo=timezone.utc)
     assert prune_rows(existing, cutoff) == [existing[1]]
+
+
+def test_cache_observations_since_reads_fixed_csv():
+    settings = replace(Settings.from_env(), local_cache_path=Path("tests/fixtures/local_weather_history.csv"))
+    cache = WeatherStationCsvCache(settings)
+
+    observations = cache.observations_since(days=3650)
+
+    assert len(observations) == 1
+    assert observations[0].measurement == "wetterdaten-gl-fw-2"
+    assert observations[0].value == 12.6

@@ -47,7 +47,7 @@ Der MVP pflegt lokal `data/local_weather_history.csv` als kleine Rolling-Window-
 
 ## Historische DWD CDC-Daten
 
-Der `DwdHistoricalClient` laedt historische DWD-CDC-ZIP-Dateien aus `observations_germany/climate`, entpackt die Produkt-Textdateien und schreibt eine lange CSV nach `data/dwd_historical_weather.csv`.
+Der `DwdHistoricalClient` laedt historische DWD-CDC-ZIP-Dateien aus `observations_germany/climate`, entpackt die Produkt-Textdateien und schreibt sie in die feste DWD-Datei `data/dwd_weather_data.csv`.
 
 Lokaler Default:
 
@@ -56,7 +56,7 @@ Lokaler Default:
 - Parameter: `air_temperature`, `precipitation`, `wind`
 - Retention: 1095 Tage
 
-Die CSV-Spalten sind `time`, `station_id`, `dataset`, `field`, `value`, `quality`, `source_url`.
+Die DWD-Datei enthaelt historische Messwerte und MOSMIX-Prognosen. Die Spalten sind `kind`, `time`, `station_id`, `dataset`, `field`, `value`, `quality`, `source_url`, `source`, `issued_at`, `valid_at`, `horizon_hours`, `unit`, `raw_name`.
 
 ## DWD-Datenquelle
 
@@ -87,7 +87,12 @@ Referenzen:
 
 ## Lokales Forecast-Archiv
 
-DWD/MOSMIX-Prognosen werden nicht in InfluxDB gespeichert. Sie werden lokal in `data/dwd_forecast_archive.csv` archiviert. Dadurch bleibt InfluxDB ausschliesslich Quelle fuer lokale Wetterstationsdaten.
+DWD/MOSMIX-Prognosen werden nicht in InfluxDB gespeichert. Sie werden lokal in `data/dwd_weather_data.csv` mit `kind=forecast` archiviert. Dadurch bleibt InfluxDB ausschliesslich Quelle fuer lokale Wetterstationsdaten.
+
+Produktiv existieren genau zwei feste lokale Daten-Dateien:
+
+- `data/local_weather_history.csv`
+- `data/dwd_weather_data.csv`
 
 ## Chatbot
 

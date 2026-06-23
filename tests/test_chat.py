@@ -30,8 +30,7 @@ def test_chat_answer_is_rule_based_without_llm_provider():
         dwd_historical_resolution="10_minutes",
         dwd_historical_parameters=["air_temperature", "precipitation", "wind"],
         dwd_historical_retention_days=1095,
-        dwd_historical_cache_path=Path("data/dwd_historical_weather.csv"),
-        forecast_archive_path=Path("data/dwd_forecast_archive.csv"),
+        dwd_data_path=Path("data/dwd_weather_data.csv"),
     )
     report = StatusReport(
         influx_ok=True,

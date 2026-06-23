@@ -48,8 +48,7 @@ class Settings:
     dwd_historical_resolution: str
     dwd_historical_parameters: list[str]
     dwd_historical_retention_days: int
-    dwd_historical_cache_path: Path
-    forecast_archive_path: Path
+    dwd_data_path: Path
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,8 +84,7 @@ class Settings:
                 if item.strip()
             ],
             dwd_historical_retention_days=int(os.getenv("DWD_HISTORICAL_RETENTION_DAYS", "1095")),
-            dwd_historical_cache_path=Path(os.getenv("DWD_HISTORICAL_CACHE_PATH", "data/dwd_historical_weather.csv")),
-            forecast_archive_path=Path(os.getenv("FORECAST_ARCHIVE_PATH", "data/dwd_forecast_archive.csv")),
+            dwd_data_path=Path(os.getenv("DWD_DATA_PATH", "data/dwd_weather_data.csv")),
         )
 
     @property

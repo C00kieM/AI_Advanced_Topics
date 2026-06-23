@@ -6,15 +6,15 @@ from io import BytesIO
 from pathlib import Path
 import csv
 import re
-import shutil
 import urllib.error
 import urllib.request
 import zipfile
 
 from .config import Settings
+from .dwd_data import DWD_DATA_COLUMNS, merge_dwd_rows, read_dwd_rows, write_dwd_rows
 
 
-HISTORICAL_COLUMNS = ["time", "station_id", "dataset", "field", "value", "quality", "source_url"]
+HISTORICAL_COLUMNS = DWD_DATA_COLUMNS
 DEFAULT_PARAMETERS = ("air_temperature", "precipitation", "wind")
 DEFAULT_PERIODS = ("historical", "recent")
 SKIP_COLUMNS = {"STATIONS_ID", "MESS_DATUM", "MESS_DATUM_BEGINN", "MESS_DATUM_ENDE", "QN", "QN_3", "QN_4", "eor"}
@@ -36,6 +36,7 @@ class DwdHistoricalRecord:
 
     def to_row(self) -> dict[str, str]:
         return {
+            "kind": "observation",
             "time": self.time.isoformat(),
             "station_id": self.station_id,
             "dataset": self.dataset,
@@ -43,6 +44,12 @@ class DwdHistoricalRecord:
             "value": f"{self.value:g}",
             "quality": self.quality,
             "source_url": self.source_url,
+            "source": "dwd-cdc",
+            "issued_at": "",
+            "valid_at": "",
+            "horizon_hours": "",
+            "unit": "",
+            "raw_name": self.field,
         }
 
 
@@ -102,21 +109,24 @@ class DwdHistoricalClient:
 class DwdHistoricalCsvStore:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.path = settings.dwd_historical_cache_path
+        self.path = settings.dwd_data_path
 
     def sync(self) -> DwdHistoricalSyncResult:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.dwd_historical_retention_days)
-        existing = read_historical_rows(self.path)
-        pruned = [row for row in existing if _row_time(row) and _row_time(row) >= cutoff]
+        existing = read_dwd_rows(self.path)
+        existing_observations = [row for row in existing if row.get("kind") == "observation"]
+        preserved_rows = [row for row in existing if row.get("kind") != "observation"]
+        pruned = [row for row in existing_observations if _row_time(row) and _row_time(row) >= cutoff]
         periods = ("recent",) if pruned else DEFAULT_PERIODS
         fetched = [record.to_row() for record in DwdHistoricalClient(self.settings).fetch_records(cutoff=cutoff, periods=periods)]
-        merged = merge_historical_rows(pruned, fetched, cutoff)
-        write_historical_rows(self.path, merged)
+        merged_observations = merge_historical_rows(pruned, fetched, cutoff)
+        merged = merge_dwd_rows([*preserved_rows, *merged_observations])
+        write_dwd_rows(self.path, merged)
         return DwdHistoricalSyncResult(
             path=self.path,
             station_ids=self.settings.dwd_historical_station_ids,
             fetched_records=len(fetched),
-            written_rows=len(merged),
+            written_rows=len(merged_observations),
             cutoff=cutoff,
         )
 
@@ -175,32 +185,11 @@ def parse_cdc_text(text: str, dataset: str, station_id: str, source_url: str) ->
 
 
 def read_historical_rows(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        return [
-            {column: row.get(column, "") for column in HISTORICAL_COLUMNS}
-            for row in reader
-            if row.get("time") and row.get("station_id") and row.get("field")
-        ]
+    return [row for row in read_dwd_rows(path) if row.get("kind") == "observation"]
 
 
 def write_historical_rows(path: Path, rows: list[dict[str, str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=HISTORICAL_COLUMNS)
-        writer.writeheader()
-        writer.writerows(rows)
-    try:
-        temp_path.replace(path)
-    except PermissionError:
-        shutil.copyfile(temp_path, path)
-        try:
-            temp_path.unlink(missing_ok=True)
-        except PermissionError:
-            pass
+    write_dwd_rows(path, merge_dwd_rows(rows))
 
 
 def merge_historical_rows(

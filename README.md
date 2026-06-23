@@ -27,10 +27,21 @@ weather-chat sync-local-db
 weather-chat sync-dwd-history
 weather-chat archive-dwd-forecast
 weather-chat chat
+weather-gui
 uvicorn weather_ai.api:app --reload
 ```
 
 Der Chat funktioniert ohne LLM-Provider. Er nutzt lokale Messdaten, DWD-Prognosen und den ML-/Datenstatus, um eine nachvollziehbare Antwort zu erzeugen.
+
+## Desktop-GUI
+
+Der lokale Desktop-Launcher startet das FastAPI-Backend ohne blockierenden Startup-Sync und oeffnet die Weather-Ops-Oberflaeche in einem nativen Fenster:
+
+```powershell
+weather-gui
+```
+
+Die GUI enthaelt ein sicheres App-Terminal mit Freitext-Chat und bekannten Slash-Kommandos: `/status`, `/sync-local`, `/sync-dwd`, `/archive`, `/compare`, `/train` und `/clear`. Es wird keine echte Betriebssystem-Shell freigegeben. Lange Aktionen laufen als Hintergrundjobs und koennen im Job-Monitor verfolgt werden.
 
 ## Lokale CSV-DB
 
@@ -48,7 +59,7 @@ Die CSV enthaelt `time`, `measurement`, `field` und `value`. Bei jedem Start wer
 weather-chat sync-local-db
 ```
 
-## Historische DWD CDC-Daten
+## Historische DWD CDC-Daten und Forecasts
 
 Der MVP kann historische DWD-CDC-Messwerte fuer Temperatur, Niederschlag und Wind lokal als lange CSV ablegen:
 
@@ -58,7 +69,7 @@ DWD_HISTORICAL_STATION_IDS=02667
 DWD_HISTORICAL_RESOLUTION=10_minutes
 DWD_HISTORICAL_PARAMETERS=air_temperature,precipitation,wind
 DWD_HISTORICAL_RETENTION_DAYS=1095
-DWD_HISTORICAL_CACHE_PATH=data/dwd_historical_weather.csv
+DWD_DATA_PATH=data/dwd_weather_data.csv
 ```
 
 Manueller Sync:
@@ -67,17 +78,17 @@ Manueller Sync:
 weather-chat sync-dwd-history
 ```
 
-Die CSV enthaelt `time`, `station_id`, `dataset`, `field`, `value`, `quality` und `source_url`. Die Struktur ist bewusst Influx-kompatibel gehalten: `dataset`/`station_id` koennen Tags sein, `field` der Messwertname und `time` der Influx-Zeitstempel.
+Die feste DWD-Datei ist `data/dwd_weather_data.csv`. Sie enthaelt historische CDC-Messwerte und lokal archivierte MOSMIX-Prognosen in einer gemeinsamen Struktur.
 
 ## InfluxDB ist Read-only
 
-Diese App schreibt niemals in InfluxDB. InfluxDB wird nur gelesen. DWD-Prognosen werden lokal in `data/dwd_forecast_archive.csv` archiviert:
+Diese App schreibt niemals in InfluxDB. InfluxDB wird nur gelesen. DWD-Prognosen werden lokal in `data/dwd_weather_data.csv` archiviert:
 
 ```powershell
 weather-chat archive-dwd-forecast
 ```
 
-Der alte Influx-Write-Pfad ist im Code hart blockiert. Auch versehentliche Aufrufe von `InfluxClient.write_forecasts(...)` werfen sofort einen Fehler.
+Der alte Influx-Write-Pfad ist im Code hart blockiert. Auch versehentliche Aufrufe von `InfluxClient.write_forecasts(...)` werfen sofort einen Fehler. Produktiv gibt es nur zwei feste Daten-Dateien: `data/local_weather_history.csv` und `data/dwd_weather_data.csv`.
 
 ## DWD MOSMIX
 

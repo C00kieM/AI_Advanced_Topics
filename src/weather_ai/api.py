@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from pathlib import Path
 
 from .chat import ChatService
 from .config import Settings
 from .diagnostics import build_status
 from .dwd_historical import DwdHistoricalCsvStore
-from .local_cache import sync_cache_on_startup
+from .gui_status import build_gui_status
+from .jobs import JobManager
+from .local_cache import WeatherStationCsvCache, sync_cache_on_startup
 from .service import WeatherService
 
 
 try:
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
+    from fastapi.responses import HTMLResponse
+    from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except Exception as exc:  # noqa: BLE001
     FastAPI = None  # type: ignore[assignment]
@@ -25,20 +30,34 @@ if FastAPI is not None:
     class ChatRequest(BaseModel):
         question: str
 
+    class TerminalCommandRequest(BaseModel):
+        command: str
 
-def create_app():
+
+def create_app(settings: Settings | None = None, sync_on_startup: bool = True):
     if FastAPI is None:
         raise RuntimeError(f"FastAPI is not installed: {_FASTAPI_IMPORT_ERROR}")
-    settings = Settings.from_env()
+    settings = settings or Settings.from_env()
     service = WeatherService(settings)
     chat_service = ChatService(settings)
+    jobs = JobManager()
     api = FastAPI(title="Wetter-KI MVP", version="0.1.0")
-    try:
-        api.state.local_cache_sync_result = sync_cache_on_startup(settings)
-        api.state.local_cache_sync_error = None
-    except Exception as exc:  # noqa: BLE001 - API should still start if cache sync fails.
-        api.state.local_cache_sync_result = None
-        api.state.local_cache_sync_error = str(exc)
+    api.state.jobs = jobs
+    api.state.local_cache_sync_result = None
+    api.state.local_cache_sync_error = None
+    if sync_on_startup:
+        try:
+            api.state.local_cache_sync_result = sync_cache_on_startup(settings)
+        except Exception as exc:  # noqa: BLE001 - API should still start if cache sync fails.
+            api.state.local_cache_sync_error = str(exc)
+
+    static_dir = Path(__file__).with_name("static")
+    if static_dir.exists():
+        api.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+        @api.get("/", response_class=HTMLResponse)
+        def index():
+            return (static_dir / "index.html").read_text(encoding="utf-8")
 
     @api.get("/health")
     def health():
@@ -50,6 +69,15 @@ def create_app():
             "warnings": status.warnings,
             "local_cache_error": api.state.local_cache_sync_error,
         }
+
+    @api.get("/status")
+    def status(live: bool = True, deep: bool = False):
+        payload = build_gui_status(settings, live=live, deep=deep)
+        payload["startup"] = {
+            "local_cache_sync_result": api.state.local_cache_sync_result,
+            "local_cache_sync_error": api.state.local_cache_sync_error,
+        }
+        return payload
 
     @api.get("/local/latest")
     def local_latest():
@@ -69,24 +97,53 @@ def create_app():
 
     @api.post("/jobs/archive-dwd-forecast")
     def archive_dwd_forecast():
-        return service.archive_dwd_forecast()
+        return jobs.start("DWD-Prognose archivieren", service.archive_dwd_forecast).to_payload()
 
     @api.post("/jobs/train")
     def train():
-        return service.train()
+        return jobs.start("Korrekturmodelle trainieren", service.train).to_payload()
+
+    @api.post("/jobs/sync-local-db")
+    def sync_local_db():
+        return jobs.start("Lokale Wetter-CSV synchronisieren", lambda: WeatherStationCsvCache(settings).sync()).to_payload()
 
     @api.post("/jobs/sync-dwd-history")
     def sync_dwd_history():
-        result = DwdHistoricalCsvStore(settings).sync()
-        return {
-            "path": str(result.path),
-            "station_ids": result.station_ids,
-            "fetched_records": result.fetched_records,
-            "written_rows": result.written_rows,
-            "cutoff": result.cutoff.isoformat(),
-        }
+        return jobs.start("DWD-CDC-Historie synchronisieren", lambda: DwdHistoricalCsvStore(settings).sync()).to_payload()
+
+    @api.get("/jobs")
+    def list_jobs():
+        return {"jobs": [job.to_payload() for job in jobs.list()]}
+
+    @api.get("/jobs/{job_id}")
+    def get_job(job_id: str):
+        try:
+            return jobs.get(job_id).to_payload()
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Job nicht gefunden.") from exc
+
+    @api.post("/terminal/command")
+    def terminal_command(request: TerminalCommandRequest):
+        command = request.command.strip().lower()
+        if not command.startswith("/"):
+            raise HTTPException(status_code=400, detail="Nur bekannte Slash-Kommandos sind erlaubt.")
+        if command == "/status":
+            return {"type": "status", "status": build_gui_status(settings, live=True, deep=False)}
+        if command == "/compare":
+            return {"type": "comparison", "comparison": service.latest_comparison_summary()}
+        if command == "/sync-local":
+            return {"type": "job", "job": jobs.start("Lokale Wetter-CSV synchronisieren", lambda: WeatherStationCsvCache(settings).sync()).to_payload()}
+        if command == "/sync-dwd":
+            return {"type": "job", "job": jobs.start("DWD-CDC-Historie synchronisieren", lambda: DwdHistoricalCsvStore(settings).sync()).to_payload()}
+        if command == "/archive":
+            return {"type": "job", "job": jobs.start("DWD-Prognose archivieren", service.archive_dwd_forecast).to_payload()}
+        if command == "/train":
+            return {"type": "job", "job": jobs.start("Korrekturmodelle trainieren", service.train).to_payload()}
+        if command == "/clear":
+            return {"type": "clear"}
+        raise HTTPException(status_code=400, detail=f"Unbekanntes Kommando: {request.command.strip()}")
 
     return api
 
 
-app = create_app() if FastAPI is not None else None
+app = create_app(sync_on_startup=False) if FastAPI is not None else None
