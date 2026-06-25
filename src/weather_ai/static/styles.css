@@ -335,6 +335,7 @@ h3 {
     "cache compare"
     "models models"
     "warnings warnings"
+    "timings timings"
     "jobs jobs";
   gap: 14px;
   align-content: start;
@@ -383,6 +384,10 @@ h3 {
 }
 
 .dashboard > .status-card:nth-of-type(8) {
+  grid-area: timings;
+}
+
+.dashboard > .status-card:nth-of-type(9) {
   grid-area: jobs;
 }
 
@@ -408,7 +413,8 @@ h3 {
 .health-grid > div,
 .model-item,
 .metric-item,
-.job-item {
+.job-item,
+.timing-item {
   min-width: 0;
   border: 1px solid #2c363d;
   border-radius: 8px;
@@ -446,7 +452,8 @@ dl div {
 }
 
 .metric-stack,
-.job-list {
+.job-list,
+.timing-list {
   display: grid;
   gap: 10px;
   padding: 14px 16px 16px;
@@ -454,7 +461,8 @@ dl div {
 
 .metric-item strong,
 .model-item strong,
-.job-item strong {
+.job-item strong,
+.timing-item strong {
   display: block;
   margin-bottom: 5px;
   font-size: 0.9rem;
@@ -462,9 +470,12 @@ dl div {
 
 .metric-item span,
 .model-item span,
-.job-item span {
+.job-item span,
+.timing-item span {
+  display: block;
   color: var(--muted);
   font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .warnings {
@@ -530,6 +541,7 @@ dl div {
       "compare"
       "models"
       "warnings"
+      "timings"
       "jobs";
   }
 

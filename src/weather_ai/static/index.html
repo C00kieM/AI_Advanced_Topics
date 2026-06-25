@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Weather Ops Terminal</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
   </head>
   <body>
     <main class="app-shell">
@@ -150,6 +150,14 @@
 
           <section class="status-card span-two">
             <div class="card-title">
+              <h3>Laufzeiten</h3>
+              <span id="timing-count" class="pill muted">0</span>
+            </div>
+            <div class="timing-list" id="timing-list"><div class="empty">Noch keine Kommandos gemessen.</div></div>
+          </section>
+
+          <section class="status-card span-two">
+            <div class="card-title">
               <h3>Job Monitor</h3>
               <span id="job-count" class="pill muted">0</span>
             </div>
@@ -158,6 +166,6 @@
         </aside>
       </section>
     </main>
-    <script src="/static/app.js" defer></script>
+    <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
   </body>
 </html>

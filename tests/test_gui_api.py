@@ -70,6 +70,26 @@ def test_terminal_known_command_can_start_job():
     assert finished["result"] == {"trained": False}
 
 
+def test_terminal_compare_does_not_query_influx_when_forecasts_are_missing():
+    settings = _settings("terminal-compare-no-forecast")
+
+    with patch(
+        "weather_ai.influx.InfluxClient.local_rows_for_training",
+        side_effect=AssertionError("compare must not fall back to Influx"),
+    ):
+        with running_app(settings) as base_url:
+            status_code, payload = request_json(
+                base_url,
+                "/terminal/command",
+                method="POST",
+                body={"command": "/compare"},
+            )
+
+    assert status_code == 200
+    assert payload["type"] == "comparison"
+    assert payload["comparison"]["pairs"] == 0
+
+
 def _settings(name: str) -> Settings:
     return replace(
         Settings.from_env(),

@@ -7,7 +7,7 @@ from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
 from .dwd import DwdClient
 from .forecast_archive import ForecastCsvArchive
-from .influx import InfluxClient, InfluxError
+from .influx import InfluxClient
 from .local_cache import WeatherStationCsvCache
 from .ml import train_models
 from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation, MODEL_VARIABLES
@@ -60,6 +60,8 @@ class WeatherService:
 
     def _comparison_points(self) -> list:
         forecasts = self.forecast_archive.read()
+        if not forecasts:
+            return []
         observations = self._local_training_rows(since_days=self._observation_days_for_forecasts(forecasts))
         return match_forecasts_to_observations(forecasts, observations)
 
@@ -72,10 +74,4 @@ class WeatherService:
 
     def _local_training_rows(self, since_days: int) -> list[LocalObservation]:
         model_fields = {LOCAL_FIELD_MAP[variable] for variable in MODEL_VARIABLES}
-        cached = self.local_cache.observations_since(days=since_days, fields=model_fields)
-        if cached:
-            return cached
-        try:
-            return self.influx.local_rows_for_training(since_days=since_days)
-        except InfluxError:
-            return []
+        return self.local_cache.observations_since(days=since_days, fields=model_fields)

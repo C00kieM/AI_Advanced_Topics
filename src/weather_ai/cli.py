@@ -73,25 +73,37 @@ def _settings_with_startup_sync() -> Settings:
     return settings
 
 
-def _cache_result_payload(result: CacheSyncResult) -> dict[str, str | int]:
-    return {
+def _cache_result_payload(result: CacheSyncResult) -> dict[str, str | int | bool | None]:
+    payload: dict[str, str | int | bool | None] = {
         "path": str(result.path),
         "existing_rows": result.existing_rows,
         "fetched_rows": result.fetched_rows,
         "written_rows": result.written_rows,
         "cutoff": result.cutoff.isoformat(),
         "started_at": result.started_at.isoformat(),
+        "skipped": result.skipped,
     }
+    if result.reason:
+        payload["reason"] = result.reason
+    if result.warning:
+        payload["warning"] = result.warning
+    return payload
 
 
-def _dwd_history_result_payload(result: DwdHistoricalSyncResult) -> dict[str, str | int | list[str]]:
-    return {
+def _dwd_history_result_payload(result: DwdHistoricalSyncResult) -> dict[str, str | int | bool | list[str] | None]:
+    payload: dict[str, str | int | bool | list[str] | None] = {
         "path": str(result.path),
         "station_ids": result.station_ids,
         "fetched_records": result.fetched_records,
         "written_rows": result.written_rows,
         "cutoff": result.cutoff.isoformat(),
+        "skipped": result.skipped,
     }
+    if result.reason:
+        payload["reason"] = result.reason
+    if result.warning:
+        payload["warning"] = result.warning
+    return payload
 
 
 if typer is not None:

@@ -24,7 +24,9 @@ class JobRecord:
     logs: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, Any]:
-        return _jsonable(asdict(self))
+        payload = _jsonable(asdict(self))
+        payload["duration_seconds"] = _duration_seconds(self)
+        return payload
 
 
 class JobManager:
@@ -52,26 +54,30 @@ class JobManager:
             return _copy_job(job)
 
     def _run(self, job_id: str, func: JobCallable) -> None:
-        self._update(job_id, status="running", started_at=datetime.now(timezone.utc))
+        started_at = datetime.now(timezone.utc)
+        self._update(job_id, status="running", started_at=started_at)
         self._append_id(job_id, "Ausfuehrung gestartet.")
         try:
             result = func()
         except Exception as exc:  # noqa: BLE001 - jobs should capture failures for the UI.
+            completed_at = datetime.now(timezone.utc)
             self._update(
                 job_id,
                 status="failed",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=completed_at,
                 error=str(exc),
             )
             self._append_id(job_id, f"Fehler: {exc}")
+            self._append_id(job_id, f"Dauer: {_format_duration((completed_at - started_at).total_seconds())}.")
             return
+        completed_at = datetime.now(timezone.utc)
         self._update(
             job_id,
             status="succeeded",
-            completed_at=datetime.now(timezone.utc),
+            completed_at=completed_at,
             result=_jsonable(result),
         )
-        self._append_id(job_id, "Ausfuehrung abgeschlossen.")
+        self._append_id(job_id, f"Ausfuehrung abgeschlossen in {_format_duration((completed_at - started_at).total_seconds())}.")
 
     def _update(self, job_id: str, **changes: Any) -> None:
         with self._lock:
@@ -117,3 +123,17 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     return value
+
+
+def _duration_seconds(job: JobRecord) -> float | None:
+    if job.started_at is None:
+        return None
+    end = job.completed_at or datetime.now(timezone.utc)
+    return max(0.0, round((end - job.started_at).total_seconds(), 3))
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, rest = divmod(seconds, 60)
+    return f"{int(minutes)}m {rest:.1f}s"

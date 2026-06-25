@@ -35,3 +35,4 @@ weather_ai = ["static/*.html", "static/*.css", "static/*.js"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-p no:cacheprovider"

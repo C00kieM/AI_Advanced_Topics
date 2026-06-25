@@ -26,6 +26,9 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 
+ASSET_VERSION = "20260625-ops3"
+
+
 if FastAPI is not None:
     class ChatRequest(BaseModel):
         question: str
@@ -45,6 +48,13 @@ def create_app(settings: Settings | None = None, sync_on_startup: bool = True):
     api.state.jobs = jobs
     api.state.local_cache_sync_result = None
     api.state.local_cache_sync_error = None
+
+    @api.middleware("http")
+    async def no_cache_gui_assets(request, call_next):
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
     if sync_on_startup:
         try:
             api.state.local_cache_sync_result = sync_cache_on_startup(settings)
@@ -57,7 +67,11 @@ def create_app(settings: Settings | None = None, sync_on_startup: bool = True):
 
         @api.get("/", response_class=HTMLResponse)
         def index():
-            return (static_dir / "index.html").read_text(encoding="utf-8")
+            html = (static_dir / "index.html").read_text(encoding="utf-8")
+            return HTMLResponse(
+                html.replace("__ASSET_VERSION__", ASSET_VERSION),
+                headers={"Cache-Control": "no-store"},
+            )
 
     @api.get("/health")
     def health():

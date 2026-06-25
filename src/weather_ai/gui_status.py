@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 from typing import Any
 import csv
@@ -179,7 +180,9 @@ def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoin
         }
     try:
         forecasts = forecasts if forecasts is not None else ForecastCsvArchive(settings).read()
-        observations = WeatherStationCsvCache(settings).observations_since(days=30)
+        observations = WeatherStationCsvCache(settings).observations_since(
+            days=_observation_days_for_forecasts(settings, forecasts)
+        )
         comparisons = match_forecasts_to_observations(forecasts, observations)
     except Exception as exc:  # noqa: BLE001 - GUI status should still render.
         return {
@@ -202,6 +205,14 @@ def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoin
         },
         "min_points": TRAINING_MIN_POINTS,
     }
+
+
+def _observation_days_for_forecasts(settings: Settings, forecasts: list[ForecastPoint]) -> int:
+    if not forecasts:
+        return 30
+    oldest = min(item.valid_at for item in forecasts)
+    age_days = ceil((datetime.now(timezone.utc) - oldest).total_seconds() / 86400) + 1
+    return max(30, min(settings.local_cache_retention_days, age_days))
 
 
 def summarize_models(model_dir: Path, comparison_counts: dict[str, int]) -> dict[str, Any]:

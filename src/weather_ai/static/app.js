@@ -3,6 +3,7 @@ const state = {
   historyIndex: -1,
   jobLogCounts: new Map(),
   polling: new Map(),
+  timings: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -59,6 +60,7 @@ async function runTerminalInput(value) {
     return;
   }
   setTerminalState("arbeitet");
+  const startedAt = performance.now();
   try {
     if (value.startsWith("/")) {
       await runCommand(value);
@@ -68,6 +70,9 @@ async function runTerminalInput(value) {
   } catch (error) {
     appendLine("error", error.message || String(error));
   } finally {
+    const durationMs = performance.now() - startedAt;
+    recordTiming(value.startsWith("/") ? value : "Chat", durationMs, "terminal");
+    appendLine("system", `Dauer ${formatDuration(durationMs)} fuer ${value.startsWith("/") ? value : "Chat"}.`);
     setTerminalState("bereit");
   }
 }
@@ -105,7 +110,7 @@ async function askChat(question) {
 async function refreshStatus(live) {
   setTerminalState("status");
   try {
-    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 15000 });
+    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 90000 });
     renderStatus(status);
     if (status.live?.warnings?.length) {
       appendLine("warning", `Status mit ${status.live.warnings.length} Warnung(en) aktualisiert.`);
@@ -142,10 +147,15 @@ function pollJob(jobId) {
         clearInterval(timer);
         state.polling.delete(jobId);
         if (job.status === "succeeded") {
-          appendLine("success", `Job ${job.id} abgeschlossen.`);
+          if (job.result?.warning) {
+            appendLine("warning", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)} mit Warnung: ${job.result.warning}`);
+          } else {
+            appendLine("success", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)}.`);
+          }
         } else {
-          appendLine("error", `Job ${job.id} fehlgeschlagen: ${job.error}`);
+          appendLine("error", `Job ${job.id} fehlgeschlagen nach ${formatSeconds(job.duration_seconds)}: ${job.error}`);
         }
+        recordTiming(job.name, (job.duration_seconds || 0) * 1000, "job");
         refreshStatus(false);
       }
     } catch (error) {
@@ -171,15 +181,16 @@ function renderStatus(payload) {
   const dwd = payload.dwd_data || {};
   const comparison = payload.comparison || {};
   const models = payload.models || {};
+  const liveChecked = live.checked !== false;
 
-  setChip("chip-influx", live.influx_ok ? "good" : "bad", "InfluxDB");
-  setChip("chip-dwd", live.dwd_ok ? "good" : "bad", "DWD");
-  setDot("influx-dot", live.influx_ok ? "good" : "bad");
-  setDot("dwd-dot", live.dwd_ok ? "good" : "bad");
+  setChip("chip-influx", liveChecked ? (live.influx_ok ? "good" : "bad") : "unknown", "InfluxDB");
+  setChip("chip-dwd", liveChecked ? (live.dwd_ok ? "good" : "bad") : "unknown", "DWD");
+  setDot("influx-dot", liveChecked ? (live.influx_ok ? "good" : "bad") : "unknown");
+  setDot("dwd-dot", liveChecked ? (live.dwd_ok ? "good" : "bad") : "unknown");
 
   $("status-generated").textContent = formatDate(payload.generated_at);
-  $("influx-state").textContent = live.influx_ok ? "OK" : "Fehler";
-  $("dwd-state").textContent = live.dwd_ok ? "OK" : "Fehler";
+  $("influx-state").textContent = liveChecked ? (live.influx_ok ? "OK" : "Fehler") : "nicht geprüft";
+  $("dwd-state").textContent = liveChecked ? (live.dwd_ok ? "OK" : "Fehler") : "nicht geprüft";
   $("local-state").textContent = localCache.stale ? "veraltet" : "aktuell";
 
   $("influx-url").textContent = config.influx_url || "-";
@@ -262,8 +273,8 @@ function renderJobs(jobs) {
   host.innerHTML = allJobs
     .slice(0, 8)
     .map((job) => {
-      const statusClass = job.status === "succeeded" ? "good" : job.status === "failed" ? "bad" : "warn";
-      return `<div class="job-item"><strong>${escapeHtml(job.name)}</strong><span class="pill ${statusClass}">${job.status}</span><span>${job.id} - ${formatDate(job.created_at)}</span></div>`;
+      const statusClass = job.status === "succeeded" && !job.result?.warning ? "good" : job.status === "failed" ? "bad" : "warn";
+      return `<div class="job-item"><strong>${escapeHtml(job.name)}</strong><span class="pill ${statusClass}">${job.status}</span><span>${job.id} - ${formatDate(job.created_at)}</span><span>Laufzeit ${formatSeconds(job.duration_seconds)}</span></div>`;
     })
     .join("");
 }
@@ -383,4 +394,46 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function recordTiming(labelText, durationMs, kind) {
+  state.timings.unshift({
+    label: labelText,
+    durationMs,
+    kind,
+    at: new Date().toISOString(),
+  });
+  state.timings = state.timings.slice(0, 10);
+  renderTimings();
+}
+
+function renderTimings() {
+  $("timing-count").textContent = String(state.timings.length);
+  const host = $("timing-list");
+  if (!state.timings.length) {
+    host.innerHTML = `<div class="empty">Noch keine Kommandos gemessen.</div>`;
+    return;
+  }
+  host.innerHTML = state.timings
+    .map(
+      (item) =>
+        `<div class="timing-item"><strong>${escapeHtml(item.label)}</strong><span>${formatDuration(item.durationMs)} - ${escapeHtml(item.kind)} - ${formatDate(item.at)}</span></div>`
+    )
+    .join("");
+}
+
+function formatDuration(durationMs) {
+  const seconds = Number(durationMs || 0) / 1000;
+  return formatSeconds(seconds);
+}
+
+function formatSeconds(seconds) {
+  if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) return "-";
+  const parsed = Math.max(0, Number(seconds));
+  if (parsed < 60) {
+    return `${parsed.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}s`;
+  }
+  const minutes = Math.floor(parsed / 60);
+  const rest = parsed - minutes * 60;
+  return `${minutes}m ${rest.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}s`;
 }

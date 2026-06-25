@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+import csv
+import re
 
 from .config import Settings
 from .diagnostics import build_status
 from .dwd import DwdClient
-from .models import ForecastPoint, LocalObservation
+from .local_cache import WeatherStationCsvCache
+from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation
 from .mosmix import MosmixClient
 
 
@@ -18,12 +24,56 @@ VARIABLE_LABELS = {
     "humidity": "Luftfeuchtigkeit",
 }
 
+MONTHS_DE = {
+    "januar": 1,
+    "februar": 2,
+    "maerz": 3,
+    "marz": 3,
+    "märz": 3,
+    "april": 4,
+    "mai": 5,
+    "juni": 6,
+    "juli": 7,
+    "august": 8,
+    "september": 9,
+    "oktober": 10,
+    "november": 11,
+    "dezember": 12,
+}
+
+DWD_HISTORY_FIELD_MAP = {
+    "TT_10": "temperature",
+    "RWS_10": "precipitation",
+    "FF_10": "wind_speed",
+    "RF_10": "humidity",
+    "PP_10": "pressure",
+}
+
+HISTORY_FIELDS = {
+    LOCAL_FIELD_MAP["temperature"],
+    LOCAL_FIELD_MAP["precipitation"],
+    LOCAL_FIELD_MAP["wind_speed"],
+    LOCAL_FIELD_MAP["humidity"],
+    LOCAL_FIELD_MAP["pressure"],
+}
+
+
+@dataclass(frozen=True)
+class HistoricalPeriod:
+    label: str
+    start: datetime
+    end: datetime
+
 
 class ChatService:
     def __init__(self, settings: Settings):
         self.settings = settings
 
     def answer(self, question: str) -> str:
+        period = _parse_historical_period(question)
+        if period is not None:
+            return self._answer_historical(question, period)
+
         status = build_status(self.settings)
         forecasts, forecast_error = self._fetch_forecasts()
         lines = [
@@ -72,6 +122,35 @@ class ChatService:
         if forecasts:
             return "DWD-Prognose und lokale Datenbasis sind verfuegbar; die lokale Korrektur haengt von gesammelten Forecast-vs-Ist-Paaren ab."
         return "Es liegen noch nicht genug Daten fuer eine belastbare Antwort vor."
+
+    def _answer_historical(self, question: str, period: HistoricalPeriod) -> str:
+        observations = WeatherStationCsvCache(self.settings).observations_between(
+            period.start,
+            period.end,
+            fields=HISTORY_FIELDS,
+        )
+        preferred = [item for item in observations if item.measurement == self.settings.local_measurement]
+        source = f"lokale CSV ({self.settings.local_measurement})"
+        summary = _summarize_local_history(preferred or observations)
+        if not summary.get("points"):
+            source = "DWD-CDC-Historie"
+            summary = _summarize_dwd_history(_dwd_history_rows_between(self.settings.dwd_data_path, period.start, period.end))
+
+        lines = [
+            "Kurzantwort:",
+            _historical_headline(period, source, summary),
+            "",
+            "Datenlage:",
+            f"- Zeitraum: {period.start:%d.%m.%Y} bis {(period.end):%d.%m.%Y} (UTC, Ende exklusiv).",
+            f"- Quelle: {source}.",
+            f"- Messpunkte: {int(summary.get('points', 0)) if summary else 0}.",
+            "",
+            "Historische Auswertung:",
+            *_historical_lines(summary),
+            "",
+            f"Frage: {question}",
+        ]
+        return "\n".join(lines)
 
 
 def _status_lines(status) -> list[str]:
@@ -142,3 +221,184 @@ def _format_value(value: float | str) -> str:
     if isinstance(value, (int, float)):
         return f"{value:g}"
     return str(value)
+
+
+def _parse_historical_period(question: str) -> HistoricalPeriod | None:
+    normalized = question.lower().replace("ä", "ae")
+    pattern = r"\b(" + "|".join(sorted((key.replace("ä", "ae") for key in MONTHS_DE), key=len, reverse=True)) + r")\s+(\d{4})\b"
+    match = re.search(pattern, normalized)
+    if not match:
+        return None
+    month_name = match.group(1)
+    year = int(match.group(2))
+    month = MONTHS_DE[month_name]
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    if month == 12:
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    label = f"{_month_label(month)} {year}"
+    return HistoricalPeriod(label=label, start=start, end=end)
+
+
+def _month_label(month: int) -> str:
+    for name, value in MONTHS_DE.items():
+        if value == month and "ae" not in name and "marz" not in name and "märz" not in name:
+            return name.capitalize()
+    return "Maerz" if month == 3 else str(month)
+
+
+def _summarize_local_history(observations: list[LocalObservation]) -> dict[str, object]:
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for observation in observations:
+        value = _number_or_none(observation.value)
+        if value is None:
+            continue
+        grouped[observation.variable].append(value)
+    return _summarize_grouped_values(grouped)
+
+
+def _summarize_dwd_history(rows: list[dict[str, str]]) -> dict[str, object]:
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row in rows:
+        variable = DWD_HISTORY_FIELD_MAP.get(row.get("field", ""))
+        value = _number_or_none(row.get("value", ""))
+        if variable is None or value is None:
+            continue
+        grouped[variable].append(value)
+    return _summarize_grouped_values(grouped)
+
+
+def _summarize_grouped_values(grouped: dict[str, list[float]]) -> dict[str, object]:
+    summary: dict[str, object] = {"points": sum(len(values) for values in grouped.values())}
+    for variable, values in grouped.items():
+        if not values:
+            continue
+        if variable == "precipitation":
+            summary[variable] = {
+                "count": len(values),
+                "sum": sum(values),
+                "max": max(values),
+            }
+            continue
+        summary[variable] = {
+            "count": len(values),
+            "avg": sum(values) / len(values),
+            "min": min(values),
+            "max": max(values),
+        }
+    return summary
+
+
+def _historical_headline(period: HistoricalPeriod, source: str, summary: dict[str, object]) -> str:
+    if not summary or not summary.get("points"):
+        return f"Fuer {period.label} liegen in lokaler CSV und DWD-Historie keine verwertbaren Messwerte vor."
+    temperature = summary.get("temperature")
+    precipitation = summary.get("precipitation")
+    wind = summary.get("wind_speed")
+    parts = [f"Fuer {period.label} wurden Messwerte {_source_phrase(source)} ausgewertet."]
+    if isinstance(temperature, dict):
+        parts.append(
+            "Temperatur im Mittel "
+            f"{_format_metric(temperature.get('avg'))} Grad Celsius, "
+            f"Minimum {_format_metric(temperature.get('min'))}, Maximum {_format_metric(temperature.get('max'))}."
+        )
+    if isinstance(precipitation, dict):
+        parts.append(f"Niederschlagssumme {_format_metric(precipitation.get('sum'))} mm.")
+    if isinstance(wind, dict):
+        parts.append(f"Wind im Mittel {_format_metric(wind.get('avg'))} m/s.")
+    return " ".join(parts)
+
+
+def _historical_lines(summary: dict[str, object]) -> list[str]:
+    if not summary or not summary.get("points"):
+        return ["- Keine passenden Messwerte gefunden."]
+    lines: list[str] = []
+    temperature = summary.get("temperature")
+    precipitation = summary.get("precipitation")
+    wind = summary.get("wind_speed")
+    humidity = summary.get("humidity")
+    pressure = summary.get("pressure")
+    if isinstance(temperature, dict):
+        lines.append(
+            "- Temperatur: "
+            f"avg {_format_metric(temperature.get('avg'))} Grad Celsius, "
+            f"min {_format_metric(temperature.get('min'))}, "
+            f"max {_format_metric(temperature.get('max'))} "
+            f"({int(temperature.get('count', 0))} Werte)."
+        )
+    if isinstance(precipitation, dict):
+        lines.append(
+            "- Niederschlag: "
+            f"Summe {_format_metric(precipitation.get('sum'))} mm, "
+            f"max pro Messintervall {_format_metric(precipitation.get('max'))} mm "
+            f"({int(precipitation.get('count', 0))} Werte)."
+        )
+    if isinstance(wind, dict):
+        lines.append(
+            "- Wind: "
+            f"avg {_format_metric(wind.get('avg'))} m/s, "
+            f"max {_format_metric(wind.get('max'))} m/s "
+            f"({int(wind.get('count', 0))} Werte)."
+        )
+    if isinstance(humidity, dict):
+        lines.append(f"- Luftfeuchtigkeit: avg {_format_metric(humidity.get('avg'))} %.")
+    if isinstance(pressure, dict):
+        lines.append(f"- Luftdruck: avg {_format_metric(pressure.get('avg'))} hPa.")
+    return lines or ["- Keine Kernwerte fuer Temperatur, Niederschlag oder Wind gefunden."]
+
+
+def _source_phrase(source: str) -> str:
+    if source == "DWD-CDC-Historie":
+        return "aus der DWD-CDC-Historie"
+    if source.startswith("lokale CSV"):
+        return f"aus der {source}"
+    return f"aus {source}"
+
+
+def _dwd_history_rows_between(path: Path, start: datetime, end: datetime) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    seen_observation = False
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            if row.get("kind") != "observation":
+                continue
+            seen_observation = True
+            row_time = _parse_row_time(row.get("time", ""))
+            if row_time is None:
+                continue
+            if row_time < start:
+                continue
+            if row_time >= end:
+                break
+            if row.get("field") in DWD_HISTORY_FIELD_MAP:
+                rows.append(row)
+    return rows if seen_observation else []
+
+
+def _parse_row_time(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _number_or_none(value: float | str | object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(str(value).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _format_metric(value: object) -> str:
+    number = _number_or_none(value)
+    if number is None:
+        return "-"
+    return f"{number:.2f}".rstrip("0").rstrip(".")

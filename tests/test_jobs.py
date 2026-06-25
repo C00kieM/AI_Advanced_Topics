@@ -21,7 +21,9 @@ def test_job_manager_records_successful_background_job():
 
     assert finished.result == {"ok": True}
     assert finished.error is None
+    assert finished.to_payload()["duration_seconds"] >= 0
     assert any("abgeschlossen" in line for line in finished.logs)
+    assert any(" in " in line for line in finished.logs)
 
 
 def test_job_manager_records_failed_background_job():
@@ -34,4 +36,6 @@ def test_job_manager_records_failed_background_job():
     finished = wait_for_status(manager, job.id, "failed")
 
     assert finished.error == "kaputt"
+    assert finished.to_payload()["duration_seconds"] >= 0
     assert any("Fehler" in line for line in finished.logs)
+    assert any("Dauer" in line for line in finished.logs)

@@ -12,12 +12,14 @@ import zipfile
 
 from .config import Settings
 from .dwd_data import DWD_DATA_COLUMNS, merge_dwd_rows, read_dwd_rows, write_dwd_rows
+from .sync_state import attempted_today, read_sync_state, sync_state_path, write_sync_state
 
 
 HISTORICAL_COLUMNS = DWD_DATA_COLUMNS
 DEFAULT_PARAMETERS = ("air_temperature", "precipitation", "wind")
 DEFAULT_PERIODS = ("historical", "recent")
 SKIP_COLUMNS = {"STATIONS_ID", "MESS_DATUM", "MESS_DATUM_BEGINN", "MESS_DATUM_ENDE", "QN", "QN_3", "QN_4", "eor"}
+MIN_RETENTION_DAYS = 365 * 3
 
 
 class DwdHistoricalError(RuntimeError):
@@ -60,6 +62,9 @@ class DwdHistoricalSyncResult:
     fetched_records: int
     written_rows: int
     cutoff: datetime
+    skipped: bool = False
+    warning: str | None = None
+    reason: str | None = None
 
 
 class DwdHistoricalClient:
@@ -110,18 +115,58 @@ class DwdHistoricalCsvStore:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.path = settings.dwd_data_path
+        self.state_path = sync_state_path(self.path, "dwd-history")
 
-    def sync(self) -> DwdHistoricalSyncResult:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.settings.dwd_historical_retention_days)
+    def sync(self, force: bool = False) -> DwdHistoricalSyncResult:
+        started_at = datetime.now(timezone.utc)
+        cutoff = started_at - timedelta(days=_retention_days(self.settings.dwd_historical_retention_days))
+        state = read_sync_state(self.state_path)
+        if not force and _has_existing_cache(self.path) and attempted_today(state, started_at):
+            written_rows = _state_count(state)
+            return DwdHistoricalSyncResult(
+                path=self.path,
+                station_ids=self.settings.dwd_historical_station_ids,
+                fetched_records=0,
+                written_rows=written_rows,
+                cutoff=cutoff,
+                skipped=True,
+                reason="DWD-CDC-Update uebersprungen: Heute wurde bereits synchronisiert.",
+            )
         existing = read_dwd_rows(self.path)
         existing_observations = [row for row in existing if row.get("kind") == "observation"]
         preserved_rows = [row for row in existing if row.get("kind") != "observation"]
         pruned = [row for row in existing_observations if _row_time(row) and _row_time(row) >= cutoff]
         periods = ("recent",) if pruned else DEFAULT_PERIODS
-        fetched = [record.to_row() for record in DwdHistoricalClient(self.settings).fetch_records(cutoff=cutoff, periods=periods)]
+        try:
+            fetched = [record.to_row() for record in DwdHistoricalClient(self.settings).fetch_records(cutoff=cutoff, periods=periods)]
+        except DwdHistoricalError as exc:
+            if not pruned:
+                raise
+            merged = merge_dwd_rows([*preserved_rows, *pruned])
+            write_dwd_rows(self.path, merged)
+            write_sync_state(
+                self.state_path,
+                attempted_at=started_at,
+                status="warning",
+                details={"error": str(exc), "written_rows": len(pruned)},
+            )
+            return DwdHistoricalSyncResult(
+                path=self.path,
+                station_ids=self.settings.dwd_historical_station_ids,
+                fetched_records=0,
+                written_rows=len(pruned),
+                cutoff=cutoff,
+                warning=f"DWD-CDC ist nicht erreichbar; vorhandene 3-Jahres-Historie bleibt aktiv. Ursache: {exc}",
+            )
         merged_observations = merge_historical_rows(pruned, fetched, cutoff)
         merged = merge_dwd_rows([*preserved_rows, *merged_observations])
         write_dwd_rows(self.path, merged)
+        write_sync_state(
+            self.state_path,
+            attempted_at=started_at,
+            status="success",
+            details={"fetched_records": len(fetched), "written_rows": len(merged_observations)},
+        )
         return DwdHistoricalSyncResult(
             path=self.path,
             station_ids=self.settings.dwd_historical_station_ids,
@@ -129,6 +174,23 @@ class DwdHistoricalCsvStore:
             written_rows=len(merged_observations),
             cutoff=cutoff,
         )
+
+
+def _retention_days(configured_days: int) -> int:
+    return max(MIN_RETENTION_DAYS, configured_days)
+
+
+def _has_existing_cache(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
+
+
+def _state_count(state: dict) -> int:
+    details = state.get("details") if isinstance(state.get("details"), dict) else {}
+    value = details.get("written_rows") or 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def cdc_directory_url(base_url: str, resolution: str, parameter: str, period: str) -> str:

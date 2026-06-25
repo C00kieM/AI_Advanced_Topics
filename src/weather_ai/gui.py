@@ -3,6 +3,7 @@ from __future__ import annotations
 from threading import Thread
 from time import monotonic, sleep
 import os
+from pathlib import Path
 import socket
 import urllib.request
 
@@ -42,7 +43,7 @@ def main() -> None:
             min_size=(1100, 720),
             text_select=True,
         )
-        webview.start()
+        webview.start(private_mode=False, storage_path=str(_webview_storage_path()))
     finally:
         server.should_exit = True
 
@@ -84,6 +85,18 @@ def _port_available(host: str, port: int) -> bool:
         except OSError:
             return False
     return True
+
+
+def _webview_storage_path() -> Path:
+    configured = os.getenv("WEATHER_GUI_STORAGE_PATH")
+    if configured:
+        path = Path(configured)
+    else:
+        local_app_data = os.getenv("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
+        path = base / "WeatherAI" / "WebView2"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from .config import Settings
 from .dwd import DwdClient
 from .influx import InfluxClient, InfluxError
+from .local_cache import WeatherStationCsvCache
+from .models import LOCAL_FIELD_MAP, LocalObservation
 from .models import StatusReport
 from .mosmix import MosmixClient
 
@@ -27,8 +29,10 @@ def build_status(settings: Settings) -> StatusReport:
         report.influx_ok = True
     except InfluxError as exc:
         report.warnings.append(str(exc))
+        _fill_from_local_cache(report, settings)
     except Exception as exc:  # noqa: BLE001 - diagnostics should report all environment failures.
         report.warnings.append(f"Unexpected InfluxDB diagnostics error: {exc}")
+        _fill_from_local_cache(report, settings)
 
     if report.is_local_stale:
         newest = max((item.time for item in report.local_latest), default=None)
@@ -52,6 +56,46 @@ def build_status(settings: Settings) -> StatusReport:
         report.warnings.append(f"DWD check failed: {exc}")
 
     return report
+
+
+def _fill_from_local_cache(report: StatusReport, settings: Settings) -> None:
+    fields = set(LOCAL_FIELD_MAP.values())
+    observations = WeatherStationCsvCache(settings).observations_since(
+        days=settings.local_cache_retention_days,
+        fields=fields,
+    )
+    if not observations:
+        return
+    report.local_latest = _latest_by_field(_preferred_measurement(observations, settings.local_measurement))
+    report.candidate_measurements = {
+        measurement: latest
+        for measurement, latest in _latest_by_measurement(observations).items()
+        if measurement in CANDIDATE_MEASUREMENTS
+    }
+    report.warnings.append("InfluxDB nicht erreichbar; lokale CSV-Cachewerte werden fuer Status und Chat genutzt.")
+
+
+def _preferred_measurement(observations: list[LocalObservation], measurement: str) -> list[LocalObservation]:
+    preferred = [item for item in observations if item.measurement == measurement]
+    return preferred or observations
+
+
+def _latest_by_field(observations: list[LocalObservation]) -> list[LocalObservation]:
+    latest: dict[str, LocalObservation] = {}
+    for observation in observations:
+        current = latest.get(observation.field)
+        if current is None or observation.time > current.time:
+            latest[observation.field] = observation
+    return sorted(latest.values(), key=lambda item: item.field)
+
+
+def _latest_by_measurement(observations: list[LocalObservation]) -> dict[str, datetime]:
+    latest: dict[str, datetime] = {}
+    for observation in observations:
+        current = latest.get(observation.measurement)
+        if current is None or observation.time > current:
+            latest[observation.measurement] = observation.time
+    return latest
 
 
 def format_status(report: StatusReport) -> str:
