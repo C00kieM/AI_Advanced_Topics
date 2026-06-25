@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import csv
 
 from .config import Settings
 from .dwd_data import DWD_DATA_COLUMNS, merge_dwd_rows, read_dwd_rows, write_dwd_rows
@@ -43,7 +44,22 @@ class ForecastCsvArchive:
 
 
 def read_forecast_rows(path: Path) -> list[dict[str, str]]:
-    return [row for row in read_dwd_rows(path) if row.get("kind") == "forecast" and row.get("valid_at")]
+    if not path.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    saw_forecast = False
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            kind = row.get("kind", "")
+            if kind == "forecast":
+                saw_forecast = True
+                if row.get("valid_at"):
+                    rows.append({column: row.get(column, "") for column in FORECAST_COLUMNS})
+                continue
+            if saw_forecast:
+                break
+    return rows
 
 
 def write_forecast_rows(path: Path, rows: list[dict[str, str]]) -> None:

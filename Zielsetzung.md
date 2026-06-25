@@ -18,6 +18,7 @@ Der erste lauffaehige MVP ist eine End-to-end-Demo:
 - erste Korrekturmodelle fuer Temperatur, Niederschlag und Wind trainieren, sobald genuegend Daten vorhanden sind
 - Fragen ueber einen interaktiven CLI-Chat ohne LLM-Abhaengigkeit beantworten
 - FastAPI-Endpunkte fuer spaetere UI- oder Automationsintegration bereitstellen
+- lokale Desktop-GUI mit Weather-Ops-Terminal, Datenstatus, sicheren Job-Aktionen und Modellstatus bereitstellen
 
 ## Erfolgskriterien
 
@@ -28,11 +29,22 @@ Der erste lauffaehige MVP ist eine End-to-end-Demo:
 - `weather-chat compare` kann Forecast-vs-Ist-Paare zeigen, sobald archivierte Prognosen und lokale Messwerte ueberlappen.
 - `weather-chat train` bewertet lokale Korrekturmodelle gegen die rohe DWD-Prognose mit MAE/RMSE.
 - Der Chatbot nennt DWD-Prognose, lokalen Datenstatus, Unsicherheit und Modellbelastbarkeit.
+- `weather-gui` startet eine lokale Desktop-Oberflaeche mit Terminal, Statuskarten, Vergleichsstatus, Trainingsstatus und Job-Monitor.
+- Lange Aktionen wie DWD-Historie-Sync, lokaler Cache-Sync, Forecast-Archivierung und Training laufen in der GUI als Hintergrundjobs.
+- Lokale Laufzeitdaten und Cache-Artefakte bleiben aus Git heraus; versioniert werden nur Code, Tests, Doku und kleine Fixtures.
+
+## Aktueller Stand
+
+- Der MVP ist als CLI, FastAPI-Service und Desktop-GUI umgesetzt.
+- InfluxDB bleibt read-only; Forecasts und DWD-Historie werden lokal in CSV-Dateien gehalten.
+- `weather-chat compare` nutzt archivierte Forecasts und lokale Ist-Werte aus der lokalen CSV und zeigt aktuell verwertbare Forecast-vs-Ist-Paare.
+- `weather-chat train` trainiert Modelle fuer Temperatur, Niederschlag und Windgeschwindigkeit, sobald genug Paare vorliegen, und schreibt lokale `.joblib`-Modelle.
+- Die GUI ist ein lokaler Launcher mit sicherem App-Terminal. Es werden nur bekannte Slash-Kommandos ausgefuehrt, keine echte Betriebssystem-Shell.
 
 ## Ausbaustufen
 
 - MOSMIX-Stationsauswahl ueber Koordinaten automatisch bestimmen.
-- Web-UI mit Chat, Vergleichsgrafiken und Datenstatus bauen.
+- Browser/Web-UI oder erweiterte Desktop-Views mit Vergleichsgrafiken und Verlauf bauen.
 - DWD-Warnungen als separaten Adapter einbinden.
 - Saisonale Modelle und getrennte Modelle je Prognosehorizont trainieren.
 - Betrieb ueber systemd oder Docker Compose automatisieren.

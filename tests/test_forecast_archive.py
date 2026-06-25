@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
+from pathlib import Path
 
-from weather_ai.forecast_archive import forecast_to_row, merge_forecast_rows, row_to_forecast
+from weather_ai.forecast_archive import forecast_to_row, merge_forecast_rows, read_forecast_rows, row_to_forecast
 from weather_ai.models import ForecastPoint
 
 
@@ -23,6 +24,14 @@ def test_forecast_row_conversion_preserves_fields():
     assert loaded.station_id == "10513"
     assert loaded.value == 12.3
     assert loaded.unit == "degC"
+
+
+def test_read_forecast_rows_stops_after_forecast_block():
+    rows = read_forecast_rows(Path("tests/fixtures/dwd_weather_data.csv"))
+
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "forecast"
+    assert rows[0]["field"] == "temperature"
 
 
 def _forecast() -> ForecastPoint:

@@ -47,10 +47,12 @@ class WeatherStationCsvCache:
             started_at=started_at,
         )
 
-    def observations_since(self, days: int) -> list[LocalObservation]:
+    def observations_since(self, days: int, fields: set[str] | None = None) -> list[LocalObservation]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
         observations: list[LocalObservation] = []
         for row in read_cache_rows(self.path):
+            if fields is not None and row["field"] not in fields:
+                continue
             row_time = _row_time(row)
             if row_time is None or row_time < cutoff:
                 continue

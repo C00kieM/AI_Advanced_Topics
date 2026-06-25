@@ -329,8 +329,16 @@ h3 {
 .dashboard {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "system system"
+    "influx dwd"
+    "cache compare"
+    "models models"
+    "warnings warnings"
+    "jobs jobs";
   gap: 14px;
   align-content: start;
+  align-items: stretch;
   max-height: calc(100vh - 114px);
   overflow: auto;
   padding-right: 2px;
@@ -341,16 +349,60 @@ h3 {
   overflow: hidden;
 }
 
+.dashboard > .status-card:nth-of-type(1) {
+  grid-area: system;
+  min-height: 236px;
+}
+
+.dashboard > .status-card:nth-of-type(2) {
+  grid-area: influx;
+  min-height: 260px;
+}
+
+.dashboard > .status-card:nth-of-type(3) {
+  grid-area: dwd;
+  min-height: 260px;
+}
+
+.dashboard > .status-card:nth-of-type(4) {
+  grid-area: cache;
+  min-height: 304px;
+}
+
+.dashboard > .status-card:nth-of-type(5) {
+  grid-area: compare;
+  min-height: 160px;
+}
+
+.dashboard > .status-card:nth-of-type(6) {
+  grid-area: models;
+}
+
+.dashboard > .status-card:nth-of-type(7) {
+  grid-area: warnings;
+}
+
+.dashboard > .status-card:nth-of-type(8) {
+  grid-area: jobs;
+}
+
 .span-two {
-  grid-column: 1 / -1;
+  grid-column: auto;
 }
 
 .health-grid,
 .model-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   padding: 14px 16px 16px;
+}
+
+.health-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.model-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .health-grid > div,
@@ -384,9 +436,9 @@ dd {
 
 dl {
   display: grid;
-  gap: 11px;
+  gap: 8px;
   margin: 0;
-  padding: 14px 16px 16px;
+  padding: 12px 16px 16px;
 }
 
 dl div {
@@ -467,6 +519,18 @@ dl div {
   .health-grid,
   .model-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard {
+    grid-template-areas:
+      "system"
+      "influx"
+      "dwd"
+      "cache"
+      "compare"
+      "models"
+      "warnings"
+      "jobs";
   }
 
   .span-two {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import sqrt
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -67,7 +68,7 @@ def _train_variable(variable: str, items: list[ComparisonPoint], model_dir: Path
 
     baseline_predictions = [row[0] for row in x_test]
     baseline_mae = mean_absolute_error(y_test, baseline_predictions)
-    baseline_rmse = mean_squared_error(y_test, baseline_predictions, squared=False)
+    baseline_rmse = _rmse(y_test, baseline_predictions, mean_squared_error)
 
     candidates = {
         "linear": LinearRegression(),
@@ -81,7 +82,7 @@ def _train_variable(variable: str, items: list[ComparisonPoint], model_dir: Path
         model.fit(x_train, y_train)
         predictions = model.predict(x_test)
         mae = mean_absolute_error(y_test, predictions)
-        rmse = mean_squared_error(y_test, predictions, squared=False)
+        rmse = _rmse(y_test, predictions, mean_squared_error)
         if mae < best_mae:
             best_name = name
             best_model = model
@@ -102,3 +103,7 @@ def _train_variable(variable: str, items: list[ComparisonPoint], model_dir: Path
             "mae_improvement": float(baseline_mae - best_mae),
         },
     }
+
+
+def _rmse(y_true, y_pred, mean_squared_error_func) -> float:
+    return sqrt(float(mean_squared_error_func(y_true, y_pred)))

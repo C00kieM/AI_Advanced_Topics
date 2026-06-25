@@ -10,7 +10,7 @@ import csv
 from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
 from .diagnostics import build_status
-from .forecast_archive import ForecastCsvArchive, row_to_forecast
+from .forecast_archive import ForecastCsvArchive, read_forecast_rows, row_to_forecast
 from .local_cache import WeatherStationCsvCache, read_cache_rows
 from .models import ForecastPoint, MODEL_VARIABLES, StatusReport
 
@@ -100,14 +100,18 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
     if not path.exists():
         return summary, []
     if not deep:
+        forecasts = [row_to_forecast(row) for row in read_forecast_rows(path)]
+        valid_times = [item.valid_at.isoformat() for item in forecasts]
         summary.update(
             {
                 "rows": None,
                 "observation_rows": None,
-                "forecast_rows": None,
+                "forecast_rows": len(forecasts),
+                "min_valid_at": min(valid_times) if valid_times else None,
+                "max_valid_at": max(valid_times) if valid_times else None,
             }
         )
-        return summary, None
+        return summary, forecasts
 
     cache_key = (str(path.resolve()), path.stat().st_size, path.stat().st_mtime)
     cached = _DWD_CACHE.get(cache_key)

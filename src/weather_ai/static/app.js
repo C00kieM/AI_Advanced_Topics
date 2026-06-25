@@ -214,7 +214,7 @@ function renderComparison(comparison) {
   host.innerHTML = keys
     .map((key) => {
       const item = summary[key];
-      return `<div class="metric-item"><strong>${label(key)}</strong><span>Count ${number(item.count)} · MAE ${round(item.mae)} · Bias ${round(item.bias)}</span></div>`;
+      return `<div class="metric-item"><strong>${label(key)}</strong><span>Count ${number(item.count)} - MAE ${round(item.mae)} - Bias ${round(item.bias)}</span></div>`;
     })
     .join("");
 }
@@ -263,7 +263,7 @@ function renderJobs(jobs) {
     .slice(0, 8)
     .map((job) => {
       const statusClass = job.status === "succeeded" ? "good" : job.status === "failed" ? "bad" : "warn";
-      return `<div class="job-item"><strong>${escapeHtml(job.name)}</strong><span class="pill ${statusClass}">${job.status}</span><span>${job.id} · ${formatDate(job.created_at)}</span></div>`;
+      return `<div class="job-item"><strong>${escapeHtml(job.name)}</strong><span class="pill ${statusClass}">${job.status}</span><span>${job.id} - ${formatDate(job.created_at)}</span></div>`;
     })
     .join("");
 }

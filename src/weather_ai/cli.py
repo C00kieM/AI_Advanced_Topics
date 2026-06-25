@@ -30,13 +30,13 @@ def _cmd_archive_dwd_forecast() -> None:
 
 
 def _cmd_compare() -> None:
-    settings = _settings_with_startup_sync()
+    settings = Settings.from_env()
     result = WeatherService(settings).latest_comparison_summary()
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 def _cmd_train() -> None:
-    settings = _settings_with_startup_sync()
+    settings = Settings.from_env()
     result = WeatherService(settings).train()
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
