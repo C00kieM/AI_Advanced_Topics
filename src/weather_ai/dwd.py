@@ -31,7 +31,7 @@ class DwdClient:
         self.settings = settings
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def fetch_station_overview(self) -> dict[str, Any]:
+    def fetch_station_overview(self, timeout: int = 15) -> dict[str, Any]:
         if not self.settings.has_dwd_station:
             raise DwdError("DWD_STATION_ID is missing. Set it in .env.")
         url = (
@@ -40,15 +40,15 @@ class DwdClient:
         )
         request = urllib.request.Request(url=url, method="GET", headers={"Accept": "application/json"})
         try:
-            with self._opener.open(request, timeout=15) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.URLError as exc:
             raise DwdError(f"DWD request failed: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise DwdError(f"DWD response was not JSON: {exc}") from exc
 
-    def fetch_forecasts(self) -> list[ForecastPoint]:
-        payload = self.fetch_station_overview()
+    def fetch_forecasts(self, timeout: int = 15) -> list[ForecastPoint]:
+        payload = self.fetch_station_overview(timeout=timeout)
         return parse_station_overview(payload, self.settings.dwd_station_id)
 
 

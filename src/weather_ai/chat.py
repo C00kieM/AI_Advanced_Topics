@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import csv
 import re
 
 from .config import Settings
+from .daily_profile import (
+    DailyProfile,
+    append_profiles,
+    corrected_forecasts,
+    daily_profile_path,
+    latest_profiles_for_date,
+    profiles_for_forecasts,
+)
 from .diagnostics import build_status
 from .dwd import DwdClient
+from .forecast_archive import ForecastCsvArchive
 from .local_cache import WeatherStationCsvCache
 from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation
 from .mosmix import MosmixClient
@@ -29,7 +38,6 @@ MONTHS_DE = {
     "februar": 2,
     "maerz": 3,
     "marz": 3,
-    "märz": 3,
     "april": 4,
     "mai": 5,
     "juni": 6,
@@ -73,6 +81,8 @@ class ChatService:
         period = _parse_historical_period(question)
         if period is not None:
             return self._answer_historical(question, period)
+        if _is_tomorrow_forecast_question(question):
+            return self._answer_tomorrow(question)
 
         status = build_status(self.settings)
         forecasts, forecast_error = self._fetch_forecasts()
@@ -88,6 +98,40 @@ class ChatService:
             "",
             "Lokale Einschaetzung:",
             *_local_interpretation(status, forecasts),
+            "",
+            f"Frage: {question}",
+        ]
+        return "\n".join(lines)
+
+    def _answer_tomorrow(self, question: str) -> str:
+        target_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+        profiles = latest_profiles_for_date(daily_profile_path(self.settings), target_date)
+        if not profiles:
+            forecasts = ForecastCsvArchive(self.settings).read()
+            generated_at = datetime.now(timezone.utc)
+            profiles = [
+                *profiles_for_forecasts(forecasts, source="dwd", generated_at=generated_at),
+                *profiles_for_forecasts(
+                    corrected_forecasts(forecasts, self.settings.model_dir),
+                    source="local-corrected",
+                    generated_at=generated_at,
+                ),
+            ]
+            profiles = [item for item in profiles if item.target_date == target_date]
+            append_profiles(daily_profile_path(self.settings), profiles)
+
+        dwd_temperature = _profile_for(profiles, "dwd", "temperature")
+        local_temperature = _profile_for(profiles, "local-corrected", "temperature")
+        lines = [
+            "Kurzantwort:",
+            _tomorrow_headline(dwd_temperature, local_temperature),
+            "",
+            "Tagesverlauf morgen:",
+            *_tomorrow_profile_lines(profiles),
+            "",
+            "Datenlage:",
+            f"- Zieltag: {target_date.isoformat()} (UTC).",
+            f"- Gespeicherte Tagesprofile: {len(profiles)}.",
             "",
             f"Frage: {question}",
         ]
@@ -187,6 +231,74 @@ def _forecast_lines(forecasts: list[ForecastPoint], forecast_error: str | None) 
     return lines or ["- DWD lieferte keine der priorisierten Variablen Temperatur, Niederschlag oder Wind."]
 
 
+def _tomorrow_headline(dwd_temperature: DailyProfile | None, local_temperature: DailyProfile | None) -> str:
+    if dwd_temperature is None:
+        return "Fuer morgen liegt noch kein gespeichertes DWD-Tagesprofil vor. Bitte zuerst /archive ausfuehren."
+    dwd = (
+        "Laut DWD wird es morgen zwischen "
+        f"{_format_metric(dwd_temperature.min_value)} und {_format_metric(dwd_temperature.max_value)} Grad Celsius. "
+        f"Am heissesten wird es um {_time_label(dwd_temperature.max_at)}."
+    )
+    if local_temperature is None:
+        return dwd + " Eine lokal korrigierte Prognose ist noch nicht verfuegbar; dafuer muessen Modelle trainiert sein."
+    local = (
+        " Lokal korrigiert liegt die Spanne zwischen "
+        f"{_format_metric(local_temperature.min_value)} und {_format_metric(local_temperature.max_value)} Grad Celsius. "
+        f"Lokal am heissesten um {_time_label(local_temperature.max_at)}."
+    )
+    return dwd + local
+
+
+def _tomorrow_profile_lines(profiles: list[DailyProfile]) -> list[str]:
+    if not profiles:
+        return ["- Keine Tagesprofile gespeichert."]
+    lines: list[str] = []
+    for source in ("dwd", "local-corrected"):
+        source_profiles = [item for item in profiles if item.source == source]
+        if not source_profiles:
+            continue
+        label = "DWD" if source == "dwd" else "Lokal korrigiert"
+        lines.append(f"- {label}:")
+        for variable in ("temperature", "precipitation", "wind_speed"):
+            profile = _profile_for(source_profiles, source, variable)
+            if profile is None:
+                continue
+            if variable == "temperature":
+                lines.append(
+                    f"  Temperatur {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} Grad Celsius; "
+                    f"Maximum um {_time_label(profile.max_at)}."
+                )
+            elif variable == "precipitation":
+                lines.append(
+                    f"  Niederschlag {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} mm je Forecastpunkt; "
+                    f"Maximum um {_time_label(profile.max_at)}."
+                )
+            elif variable == "wind_speed":
+                lines.append(
+                    f"  Wind {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} m/s; "
+                    f"Maximum um {_time_label(profile.max_at)}."
+                )
+    return lines or ["- Keine Kernprofile fuer Temperatur, Niederschlag oder Wind gespeichert."]
+
+
+def _profile_for(profiles: list[DailyProfile], source: str, variable: str) -> DailyProfile | None:
+    candidates = [item for item in profiles if item.source == source and item.variable == variable]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item.generated_at)
+
+
+def _is_tomorrow_forecast_question(question: str) -> bool:
+    normalized = _normalize_german_text(question)
+    return "morgen" in normalized and any(
+        token in normalized for token in ("wetter", "temperatur", "grad", "warm", "heiss", "prognose")
+    )
+
+
+def _time_label(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%H:%M UTC")
+
+
 def _local_interpretation(status, forecasts: list[ForecastPoint]) -> list[str]:
     latest_by_variable = _latest_observations_by_variable(status.local_latest)
     lines: list[str] = []
@@ -224,8 +336,8 @@ def _format_value(value: float | str) -> str:
 
 
 def _parse_historical_period(question: str) -> HistoricalPeriod | None:
-    normalized = question.lower().replace("ä", "ae")
-    pattern = r"\b(" + "|".join(sorted((key.replace("ä", "ae") for key in MONTHS_DE), key=len, reverse=True)) + r")\s+(\d{4})\b"
+    normalized = _normalize_german_text(question)
+    pattern = r"\b(" + "|".join(sorted(MONTHS_DE, key=len, reverse=True)) + r")\s+(\d{4})\b"
     match = re.search(pattern, normalized)
     if not match:
         return None
@@ -242,10 +354,34 @@ def _parse_historical_period(question: str) -> HistoricalPeriod | None:
 
 
 def _month_label(month: int) -> str:
-    for name, value in MONTHS_DE.items():
-        if value == month and "ae" not in name and "marz" not in name and "märz" not in name:
-            return name.capitalize()
-    return "Maerz" if month == 3 else str(month)
+    labels = {
+        1: "Januar",
+        2: "Februar",
+        3: "Maerz",
+        4: "April",
+        5: "Mai",
+        6: "Juni",
+        7: "Juli",
+        8: "August",
+        9: "September",
+        10: "Oktober",
+        11: "November",
+        12: "Dezember",
+    }
+    return labels.get(month, str(month))
+
+
+def _normalize_german_text(value: str) -> str:
+    normalized = value.lower()
+    replacements = (
+        ("\u00e4", "ae"),
+        ("\u00f6", "oe"),
+        ("\u00fc", "ue"),
+        ("\u00df", "ss"),
+    )
+    for source, replacement in replacements:
+        normalized = normalized.replace(source, replacement)
+    return normalized
 
 
 def _summarize_local_history(observations: list[LocalObservation]) -> dict[str, object]:

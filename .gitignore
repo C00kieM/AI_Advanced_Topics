@@ -217,6 +217,7 @@ data/local_weather_history.csv
 data/local_weather_history.csv.tmp
 data/dwd_weather_data.csv
 data/*.sync.json
+data/daily_weather_profiles.csv
 data/dwd_forecast_archive.csv
 data/dwd_forecast_archive.csv.tmp
 data/dwd_historical_weather.csv

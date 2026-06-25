@@ -85,7 +85,7 @@ def create_app(settings: Settings | None = None, sync_on_startup: bool = True):
         }
 
     @api.get("/status")
-    def status(live: bool = True, deep: bool = False):
+    def status(live: bool = False, deep: bool = False):
         payload = build_gui_status(settings, live=live, deep=deep)
         payload["startup"] = {
             "local_cache_sync_result": api.state.local_cache_sync_result,
@@ -142,7 +142,7 @@ def create_app(settings: Settings | None = None, sync_on_startup: bool = True):
         if not command.startswith("/"):
             raise HTTPException(status_code=400, detail="Nur bekannte Slash-Kommandos sind erlaubt.")
         if command == "/status":
-            return {"type": "status", "status": build_gui_status(settings, live=True, deep=False)}
+            return {"type": "status", "status": build_gui_status(settings, live=False, deep=False)}
         if command == "/compare":
             return {"type": "comparison", "comparison": service.latest_comparison_summary()}
         if command == "/sync-local":

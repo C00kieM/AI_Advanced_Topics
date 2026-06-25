@@ -24,8 +24,8 @@ def build_status(settings: Settings) -> StatusReport:
     report = StatusReport()
     influx = InfluxClient(settings)
     try:
-        report.local_latest = influx.latest_observations(settings.local_measurement)
-        report.candidate_measurements = influx.latest_measurement_times(CANDIDATE_MEASUREMENTS)
+        report.local_latest = influx.latest_observations(settings.local_measurement, timeout=5)
+        report.candidate_measurements = influx.latest_measurement_times(CANDIDATE_MEASUREMENTS, timeout=3)
         report.influx_ok = True
     except InfluxError as exc:
         report.warnings.append(str(exc))
@@ -45,10 +45,10 @@ def build_status(settings: Settings) -> StatusReport:
 
     try:
         if settings.has_mosmix_station:
-            MosmixClient(settings).fetch_forecasts()
+            MosmixClient(settings).fetch_forecasts(timeout=8)
             report.dwd_ok = True
         elif settings.has_dwd_station:
-            DwdClient(settings).fetch_station_overview()
+            DwdClient(settings).fetch_station_overview(timeout=8)
             report.dwd_ok = True
         else:
             report.warnings.append("MOSMIX_STATION_ID und DWD_STATION_ID fehlen; DWD-Livecheck uebersprungen.")

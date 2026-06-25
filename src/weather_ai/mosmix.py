@@ -41,13 +41,13 @@ class MosmixClient:
         self.settings = settings
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def fetch_forecasts(self) -> list[ForecastPoint]:
+    def fetch_forecasts(self, timeout: int = 30) -> list[ForecastPoint]:
         if not self.settings.has_mosmix_station:
             raise MosmixError("MOSMIX_STATION_ID is missing. Set it in .env.")
-        payload = self.fetch_kmz()
+        payload = self.fetch_kmz(timeout=timeout)
         return parse_mosmix_kmz(payload, self.settings.mosmix_station_id)
 
-    def fetch_kmz(self) -> bytes:
+    def fetch_kmz(self, timeout: int = 30) -> bytes:
         url = mosmix_latest_url(
             base_url=self.settings.mosmix_base_url,
             station_id=self.settings.mosmix_station_id,
@@ -55,7 +55,7 @@ class MosmixClient:
         )
         request = urllib.request.Request(url=url, method="GET", headers={"Accept": "application/octet-stream"})
         try:
-            with self._opener.open(request, timeout=30) as response:
+            with self._opener.open(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.URLError as exc:
             raise MosmixError(f"MOSMIX request failed: {exc}") from exc

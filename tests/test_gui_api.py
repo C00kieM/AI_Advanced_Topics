@@ -23,6 +23,15 @@ def test_gui_status_endpoint_returns_safe_structured_payload():
     assert "token" not in payload["config"].values()
 
 
+def test_gui_status_endpoint_defaults_to_fast_non_live_status():
+    settings = _settings("status-default")
+    with running_app(settings) as base_url:
+        status_code, payload = request_json(base_url, "/status")
+
+    assert status_code == 200
+    assert payload["live"]["checked"] is False
+
+
 def test_job_endpoint_starts_and_exposes_background_result():
     settings = _settings("archive-job")
     with patch("weather_ai.service.WeatherService.archive_dwd_forecast", return_value={"written_rows": 3}):

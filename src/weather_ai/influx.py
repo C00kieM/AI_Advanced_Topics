@@ -67,10 +67,10 @@ class InfluxClient:
         reader = csv.DictReader(io.StringIO(payload))
         return [row for row in reader if row and row.get("_time") != "_time"]
 
-    def latest_observations(self, measurement: str | None = None, days: int = 365) -> list[LocalObservation]:
+    def latest_observations(self, measurement: str | None = None, days: int = 365, timeout: int = 15) -> list[LocalObservation]:
         measurement = measurement or self.settings.local_measurement
         flux = latest_observations_flux(self.settings.influx_bucket, measurement, days)
-        rows = self.query_csv(flux)
+        rows = self.query_csv(flux, timeout=timeout)
         observations: list[LocalObservation] = []
         for row in rows:
             field = row.get("_field", "")
@@ -86,11 +86,11 @@ class InfluxClient:
             )
         return observations
 
-    def latest_measurement_times(self, measurements: Iterable[str], field: str = "Lufttemperatur") -> dict[str, datetime | None]:
+    def latest_measurement_times(self, measurements: Iterable[str], field: str = "Lufttemperatur", timeout: int = 15) -> dict[str, datetime | None]:
         result: dict[str, datetime | None] = {}
         for measurement in measurements:
             flux = latest_field_flux(self.settings.influx_bucket, measurement, field, 365)
-            rows = self.query_csv(flux)
+            rows = self.query_csv(flux, timeout=timeout)
             result[measurement] = _parse_time(rows[0]["_time"]) if rows else None
         return result
 
