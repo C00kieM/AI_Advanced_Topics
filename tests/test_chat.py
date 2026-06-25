@@ -52,6 +52,10 @@ def test_chat_answer_is_rule_based_without_llm_provider():
 
     assert "Der neueste lokale Messwert" in answer
     assert "**13.3 Grad Celsius**" in answer
+    assert "Wind:" in answer
+    assert "Niederschlag:" in answer
+    assert "Lokaler Wind:" in answer
+    assert "Lokaler Niederschlag:" in answer
     assert "DWD_STATION_ID" in answer
     assert "LLM" not in answer
 
@@ -100,6 +104,7 @@ def test_chat_answers_month_history_from_dwd_history_without_live_forecast():
     assert "Historische Auswertung:" not in answer
     assert "DWD-Prognose:" not in answer
     assert "Temperatur im Mittel **3 Grad Celsius**" in answer
+    assert "Wind im Mittel 3 m/s" in answer
     assert "Niederschlagssumme 1.5 mm" in answer
     assert "Temperatur:" not in answer
 
@@ -134,6 +139,58 @@ def test_chat_answers_tomorrow_with_dwd_and_local_daily_profiles():
             points=24,
             issued_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
         ),
+        DailyProfile(
+            generated_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+            source="dwd",
+            target_date=target,
+            variable="wind_speed",
+            min_value=1.0,
+            max_value=3.0,
+            min_at=datetime(2026, 6, 26, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 6, 26, 15, tzinfo=timezone.utc),
+            avg_value=2.0,
+            points=24,
+            issued_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+        ),
+        DailyProfile(
+            generated_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+            source="local-corrected",
+            target_date=target,
+            variable="wind_speed",
+            min_value=0.5,
+            max_value=2.0,
+            min_at=datetime(2026, 6, 26, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 6, 26, 14, tzinfo=timezone.utc),
+            avg_value=1.0,
+            points=24,
+            issued_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+        ),
+        DailyProfile(
+            generated_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+            source="dwd",
+            target_date=target,
+            variable="precipitation",
+            min_value=0.0,
+            max_value=0.4,
+            min_at=datetime(2026, 6, 26, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 6, 26, 15, tzinfo=timezone.utc),
+            avg_value=0.1,
+            points=24,
+            issued_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+        ),
+        DailyProfile(
+            generated_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+            source="local-corrected",
+            target_date=target,
+            variable="precipitation",
+            min_value=0.0,
+            max_value=0.2,
+            min_at=datetime(2026, 6, 26, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 6, 26, 14, tzinfo=timezone.utc),
+            avg_value=0.05,
+            points=24,
+            issued_at=datetime(2026, 6, 25, 6, tzinfo=timezone.utc),
+        ),
     ]
 
     with (
@@ -142,10 +199,13 @@ def test_chat_answers_tomorrow_with_dwd_and_local_daily_profiles():
     ):
         answer = ChatService(settings).answer("Wie wird das Wetter morgen, wird es hei\u00df?")
 
-    assert "DWD-Prognose eine Temperatur zwischen **18 Grad Celsius** und **27 Grad Celsius**" in answer
+    assert "DWD-Prognose und lokale Korrektur zusammengefasst" in answer
+    assert "Temperatur: DWD **18 Grad Celsius** bis **27 Grad Celsius**" in answer
     assert "gegen 15:00 UTC" in answer
-    assert "Lokal korrigiert schaetzt das Modell eher **17 Grad Celsius** bis **25 Grad Celsius**" in answer
+    assert "lokal korrigiert **17 Grad Celsius** bis **25 Grad Celsius**" in answer
     assert "gegen 14:00 UTC" in answer
+    assert "Wind: DWD 1 bis 3 m/s; lokal korrigiert 0.5 bis 2 m/s." in answer
+    assert "Niederschlag: DWD 0 bis 0.4 mm je Forecastpunkt; lokal korrigiert 0 bis 0.2 mm je Forecastpunkt." in answer
     assert "Tagesverlauf morgen:" not in answer
     assert "zuletzt gespeicherte Tagesprofil" in answer
 
