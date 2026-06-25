@@ -287,6 +287,11 @@ h3 {
   color: var(--muted);
 }
 
+.line strong {
+  color: #fff4d6;
+  font-weight: 800;
+}
+
 .terminal-input {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

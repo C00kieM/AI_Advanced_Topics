@@ -87,19 +87,11 @@ class ChatService:
         status = build_status(self.settings)
         forecasts, forecast_error = self._fetch_forecasts()
         lines = [
-            "Kurzantwort:",
             self._headline(status, forecasts, forecast_error),
             "",
-            "Datenlage:",
-            *_status_lines(status),
-            "",
-            "DWD-Prognose:",
+            *_assistant_status_lines(status),
             *_forecast_lines(forecasts, forecast_error),
-            "",
-            "Lokale Einschaetzung:",
             *_local_interpretation(status, forecasts),
-            "",
-            f"Frage: {question}",
         ]
         return "\n".join(lines)
 
@@ -123,17 +115,10 @@ class ChatService:
         dwd_temperature = _profile_for(profiles, "dwd", "temperature")
         local_temperature = _profile_for(profiles, "local-corrected", "temperature")
         lines = [
-            "Kurzantwort:",
             _tomorrow_headline(dwd_temperature, local_temperature),
             "",
-            "Tagesverlauf morgen:",
             *_tomorrow_profile_lines(profiles),
-            "",
-            "Datenlage:",
-            f"- Zieltag: {target_date.isoformat()} (UTC).",
-            f"- Gespeicherte Tagesprofile: {len(profiles)}.",
-            "",
-            f"Frage: {question}",
+            "Ich nutze dafuer das zuletzt gespeicherte Tagesprofil.",
         ]
         return "\n".join(lines)
 
@@ -181,70 +166,72 @@ class ChatService:
             summary = _summarize_dwd_history(_dwd_history_rows_between(self.settings.dwd_data_path, period.start, period.end))
 
         lines = [
-            "Kurzantwort:",
             _historical_headline(period, source, summary),
             "",
-            "Datenlage:",
-            f"- Zeitraum: {period.start:%d.%m.%Y} bis {(period.end):%d.%m.%Y} (UTC, Ende exklusiv).",
-            f"- Quelle: {source}.",
-            f"- Messpunkte: {int(summary.get('points', 0)) if summary else 0}.",
-            "",
-            "Historische Auswertung:",
-            *_historical_lines(summary),
-            "",
-            f"Frage: {question}",
+            f"Basis: {int(summary.get('points', 0)) if summary else 0} Messwerte aus {source}.",
         ]
         return "\n".join(lines)
 
 
-def _status_lines(status) -> list[str]:
-    lines = [f"- InfluxDB: {'OK' if status.influx_ok else 'FEHLER'}"]
+def _assistant_status_lines(status) -> list[str]:
+    lines: list[str] = []
     latest = max((item.time for item in status.local_latest), default=None)
     if latest:
-        lines.append(f"- Neuester lokaler Messwert: {latest.isoformat()}")
+        lines.append(f"Der neueste lokale Messwert ist vom {latest:%d.%m.%Y um %H:%M} UTC.")
     else:
-        lines.append("- Neuester lokaler Messwert: keine Daten")
+        lines.append("Ich finde aktuell keine lokalen Messwerte im Cache.")
     if status.is_local_stale:
-        lines.append("- Bewertung: lokale Daten sind veraltet; lokale Erfahrung nur eingeschraenkt nutzbar.")
+        lines.append("Die lokale Korrektur ist deshalb nur eingeschraenkt belastbar.")
     if status.warnings:
-        lines.extend([f"- Hinweis: {warning}" for warning in status.warnings])
+        lines.append(f"Hinweis: {status.warnings[0]}")
     return lines
 
 
 def _forecast_lines(forecasts: list[ForecastPoint], forecast_error: str | None) -> list[str]:
     if forecast_error:
-        return [f"- {forecast_error}"]
+        return [f"DWD-Hinweis: {forecast_error}"]
     if not forecasts:
-        return ["- Keine Forecast-Punkte vorhanden."]
+        return ["DWD liefert gerade keine verwertbare Prognose."]
     grouped: dict[str, list[ForecastPoint]] = defaultdict(list)
     for item in forecasts:
         if item.variable in {"temperature", "precipitation", "wind_speed"}:
             grouped[item.variable].append(item)
     lines: list[str] = []
-    for variable in ("temperature", "precipitation", "wind_speed"):
-        items = sorted(grouped.get(variable, []), key=lambda item: item.valid_at)[:3]
-        if not items:
-            continue
-        label = VARIABLE_LABELS.get(variable, variable)
-        values = ", ".join([f"{item.value:g} fuer {item.valid_at:%d.%m. %H:%M} UTC" for item in items])
-        lines.append(f"- {label}: {values}")
-    return lines or ["- DWD lieferte keine der priorisierten Variablen Temperatur, Niederschlag oder Wind."]
+    temperature_items = sorted(grouped.get("temperature", []), key=lambda item: item.valid_at)
+    if temperature_items:
+        window = temperature_items[: min(6, len(temperature_items))]
+        min_item = min(window, key=lambda item: item.value)
+        max_item = max(window, key=lambda item: item.value)
+        lines.append(
+            "In den naechsten Stunden liegt die DWD-Temperatur grob zwischen "
+            f"{_format_temperature(min_item.value)} und {_format_temperature(max_item.value)}."
+        )
+    precipitation_items = grouped.get("precipitation", [])
+    if precipitation_items:
+        maximum = max(item.value for item in precipitation_items[: min(6, len(precipitation_items))])
+        if maximum > 0:
+            lines.append(f"Niederschlag ist moeglich, Spitze im Kurzfenster etwa {_format_metric(maximum)} mm.")
+    wind_items = grouped.get("wind_speed", [])
+    if wind_items:
+        maximum = max(item.value for item in wind_items[: min(6, len(wind_items))])
+        lines.append(f"Der Wind bleibt im Kurzfenster bei bis zu {_format_metric(maximum)} m/s.")
+    return lines or ["DWD lieferte keine priorisierten Werte fuer Temperatur, Niederschlag oder Wind."]
 
 
 def _tomorrow_headline(dwd_temperature: DailyProfile | None, local_temperature: DailyProfile | None) -> str:
     if dwd_temperature is None:
         return "Fuer morgen liegt noch kein gespeichertes DWD-Tagesprofil vor. Bitte zuerst /archive ausfuehren."
     dwd = (
-        "Laut DWD wird es morgen zwischen "
-        f"{_format_metric(dwd_temperature.min_value)} und {_format_metric(dwd_temperature.max_value)} Grad Celsius. "
-        f"Am heissesten wird es um {_time_label(dwd_temperature.max_at)}."
+        "Fuer morgen sieht die DWD-Prognose eine Temperatur zwischen "
+        f"{_format_temperature(dwd_temperature.min_value)} und {_format_temperature(dwd_temperature.max_value)}. "
+        f"Am waermsten wird es voraussichtlich gegen {_time_label(dwd_temperature.max_at)}."
     )
     if local_temperature is None:
         return dwd + " Eine lokal korrigierte Prognose ist noch nicht verfuegbar; dafuer muessen Modelle trainiert sein."
     local = (
-        " Lokal korrigiert liegt die Spanne zwischen "
-        f"{_format_metric(local_temperature.min_value)} und {_format_metric(local_temperature.max_value)} Grad Celsius. "
-        f"Lokal am heissesten um {_time_label(local_temperature.max_at)}."
+        " Lokal korrigiert schaetzt das Modell eher "
+        f"{_format_temperature(local_temperature.min_value)} bis {_format_temperature(local_temperature.max_value)}, "
+        f"mit dem Maximum gegen {_time_label(local_temperature.max_at)}."
     )
     return dwd + local
 
@@ -253,32 +240,18 @@ def _tomorrow_profile_lines(profiles: list[DailyProfile]) -> list[str]:
     if not profiles:
         return ["- Keine Tagesprofile gespeichert."]
     lines: list[str] = []
-    for source in ("dwd", "local-corrected"):
-        source_profiles = [item for item in profiles if item.source == source]
-        if not source_profiles:
-            continue
-        label = "DWD" if source == "dwd" else "Lokal korrigiert"
-        lines.append(f"- {label}:")
-        for variable in ("temperature", "precipitation", "wind_speed"):
-            profile = _profile_for(source_profiles, source, variable)
-            if profile is None:
-                continue
-            if variable == "temperature":
-                lines.append(
-                    f"  Temperatur {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} Grad Celsius; "
-                    f"Maximum um {_time_label(profile.max_at)}."
-                )
-            elif variable == "precipitation":
-                lines.append(
-                    f"  Niederschlag {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} mm je Forecastpunkt; "
-                    f"Maximum um {_time_label(profile.max_at)}."
-                )
-            elif variable == "wind_speed":
-                lines.append(
-                    f"  Wind {_format_metric(profile.min_value)} bis {_format_metric(profile.max_value)} m/s; "
-                    f"Maximum um {_time_label(profile.max_at)}."
-                )
-    return lines or ["- Keine Kernprofile fuer Temperatur, Niederschlag oder Wind gespeichert."]
+    dwd_rain = _profile_for(profiles, "dwd", "precipitation")
+    dwd_wind = _profile_for(profiles, "dwd", "wind_speed")
+    if dwd_rain is not None:
+        if dwd_rain.max_value <= 0:
+            lines.append("Niederschlag wirkt nach den gespeicherten DWD-Daten unauffaellig.")
+        else:
+            lines.append(f"Niederschlag ist moeglich, maximal etwa {_format_metric(dwd_rain.max_value)} mm je Forecastpunkt.")
+    if dwd_wind is not None:
+        lines.append(f"Wind: DWD sieht morgen bis etwa {_format_metric(dwd_wind.max_value)} m/s.")
+    if _profile_for(profiles, "local-corrected", "temperature") is not None:
+        lines.append("Die lokale Schaetzung basiert auf den trainierten Korrekturmodellen und kann bei veralteten Messdaten schwanken.")
+    return lines or ["Ich habe ein Tagesprofil gefunden, aber keine kompakten Zusatzwerte fuer Niederschlag oder Wind."]
 
 
 def _profile_for(profiles: list[DailyProfile], source: str, variable: str) -> DailyProfile | None:
@@ -306,17 +279,17 @@ def _local_interpretation(status, forecasts: list[ForecastPoint]) -> list[str]:
     wind = latest_by_variable.get("wind_speed")
     precipitation = latest_by_variable.get("precipitation")
     if temperature:
-        lines.append(f"- Letzte lokale Temperatur: {_format_value(temperature.value)} Grad.")
+        lines.append(f"Die letzte lokale Temperatur liegt bei {_format_temperature(temperature.value)}.")
     if precipitation:
-        lines.append(f"- Letzter lokaler Niederschlag: {_format_value(precipitation.value)}.")
+        lines.append(f"Der letzte lokale Niederschlagswert liegt bei {_format_value(precipitation.value)}.")
     if wind:
-        lines.append(f"- Letzte lokale Windgeschwindigkeit: {_format_value(wind.value)}.")
+        lines.append(f"Die letzte lokale Windgeschwindigkeit liegt bei {_format_value(wind.value)} m/s.")
     if status.is_local_stale:
-        lines.append("- Keine automatische lokale Korrektur anwenden, bis wieder aktuelle Stationsdaten ankommen.")
+        lines.append("Ich wuerde die lokale Korrektur erst wieder staerker gewichten, wenn frische Stationsdaten ankommen.")
     elif forecasts:
-        lines.append("- Lokale Korrektur wird belastbarer, sobald archivierte DWD-Prognosen mit spaeteren Ist-Werten ueberlappen.")
+        lines.append("Die lokale Korrektur wird mit mehr Forecast-vs-Ist-Paaren belastbarer.")
     if not lines:
-        lines.append("- Keine lokalen Kernmesswerte fuer Temperatur, Niederschlag oder Wind gefunden.")
+        lines.append("Ich finde keine lokalen Kernmesswerte fuer Temperatur, Niederschlag oder Wind.")
     return lines
 
 
@@ -436,8 +409,8 @@ def _historical_headline(period: HistoricalPeriod, source: str, summary: dict[st
     if isinstance(temperature, dict):
         parts.append(
             "Temperatur im Mittel "
-            f"{_format_metric(temperature.get('avg'))} Grad Celsius, "
-            f"Minimum {_format_metric(temperature.get('min'))}, Maximum {_format_metric(temperature.get('max'))}."
+            f"{_format_temperature(temperature.get('avg'))}, "
+            f"Minimum {_format_temperature(temperature.get('min'))}, Maximum {_format_temperature(temperature.get('max'))}."
         )
     if isinstance(precipitation, dict):
         parts.append(f"Niederschlagssumme {_format_metric(precipitation.get('sum'))} mm.")
@@ -448,7 +421,7 @@ def _historical_headline(period: HistoricalPeriod, source: str, summary: dict[st
 
 def _historical_lines(summary: dict[str, object]) -> list[str]:
     if not summary or not summary.get("points"):
-        return ["- Keine passenden Messwerte gefunden."]
+        return ["Ich habe dazu keine passenden Messwerte gefunden."]
     lines: list[str] = []
     temperature = summary.get("temperature")
     precipitation = summary.get("precipitation")
@@ -457,31 +430,31 @@ def _historical_lines(summary: dict[str, object]) -> list[str]:
     pressure = summary.get("pressure")
     if isinstance(temperature, dict):
         lines.append(
-            "- Temperatur: "
-            f"avg {_format_metric(temperature.get('avg'))} Grad Celsius, "
-            f"min {_format_metric(temperature.get('min'))}, "
-            f"max {_format_metric(temperature.get('max'))} "
+            "Temperatur: "
+            f"im Mittel {_format_temperature(temperature.get('avg'))}, "
+            f"Minimum {_format_temperature(temperature.get('min'))}, "
+            f"Maximum {_format_temperature(temperature.get('max'))} "
             f"({int(temperature.get('count', 0))} Werte)."
         )
     if isinstance(precipitation, dict):
         lines.append(
-            "- Niederschlag: "
+            "Niederschlag: "
             f"Summe {_format_metric(precipitation.get('sum'))} mm, "
-            f"max pro Messintervall {_format_metric(precipitation.get('max'))} mm "
+            f"maximal {_format_metric(precipitation.get('max'))} mm pro Messintervall "
             f"({int(precipitation.get('count', 0))} Werte)."
         )
     if isinstance(wind, dict):
         lines.append(
-            "- Wind: "
-            f"avg {_format_metric(wind.get('avg'))} m/s, "
-            f"max {_format_metric(wind.get('max'))} m/s "
+            "Wind: "
+            f"im Mittel {_format_metric(wind.get('avg'))} m/s, "
+            f"maximal {_format_metric(wind.get('max'))} m/s "
             f"({int(wind.get('count', 0))} Werte)."
         )
     if isinstance(humidity, dict):
-        lines.append(f"- Luftfeuchtigkeit: avg {_format_metric(humidity.get('avg'))} %.")
+        lines.append(f"Luftfeuchtigkeit: im Mittel {_format_metric(humidity.get('avg'))} %.")
     if isinstance(pressure, dict):
-        lines.append(f"- Luftdruck: avg {_format_metric(pressure.get('avg'))} hPa.")
-    return lines or ["- Keine Kernwerte fuer Temperatur, Niederschlag oder Wind gefunden."]
+        lines.append(f"Luftdruck: im Mittel {_format_metric(pressure.get('avg'))} hPa.")
+    return lines or ["Ich finde keine Kernwerte fuer Temperatur, Niederschlag oder Wind."]
 
 
 def _source_phrase(source: str) -> str:
@@ -531,6 +504,10 @@ def _number_or_none(value: float | str | object) -> float | None:
         return float(str(value).replace(",", "."))
     except ValueError:
         return None
+
+
+def _format_temperature(value: object) -> str:
+    return f"**{_format_metric(value)} Grad Celsius**"
 
 
 def _format_metric(value: object) -> str:

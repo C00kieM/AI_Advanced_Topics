@@ -327,7 +327,7 @@ function appendLine(kind, text) {
   const output = $("terminal-output");
   const line = document.createElement("div");
   line.className = `line ${kind}`;
-  line.textContent = text;
+  line.innerHTML = renderTerminalText(text);
   output.appendChild(line);
   output.scrollTop = output.scrollHeight;
 }
@@ -394,6 +394,10 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function renderTerminalText(value) {
+  return escapeHtml(value).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function recordTiming(labelText, durationMs, kind) {

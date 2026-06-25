@@ -50,7 +50,8 @@ def test_chat_answer_is_rule_based_without_llm_provider():
     with patch("weather_ai.chat.build_status", return_value=report):
         answer = ChatService(settings).answer("Wie ist die aktuelle Datenlage?")
 
-    assert "Datenlage:" in answer
+    assert "Der neueste lokale Messwert" in answer
+    assert "**13.3 Grad Celsius**" in answer
     assert "DWD_STATION_ID" in answer
     assert "LLM" not in answer
 
@@ -96,10 +97,11 @@ def test_chat_answers_month_history_from_dwd_history_without_live_forecast():
 
     assert "Maerz 2026" in answer
     assert "DWD-CDC-Historie" in answer
-    assert "Historische Auswertung:" in answer
+    assert "Historische Auswertung:" not in answer
     assert "DWD-Prognose:" not in answer
-    assert "Temperatur: avg 3" in answer
-    assert "Niederschlag: Summe 1.5 mm" in answer
+    assert "Temperatur im Mittel **3 Grad Celsius**" in answer
+    assert "Niederschlagssumme 1.5 mm" in answer
+    assert "Temperatur:" not in answer
 
 
 def test_chat_answers_tomorrow_with_dwd_and_local_daily_profiles():
@@ -140,10 +142,12 @@ def test_chat_answers_tomorrow_with_dwd_and_local_daily_profiles():
     ):
         answer = ChatService(settings).answer("Wie wird das Wetter morgen, wird es hei\u00df?")
 
-    assert "Laut DWD wird es morgen zwischen 18 und 27 Grad Celsius" in answer
-    assert "Am heissesten wird es um 15:00 UTC" in answer
-    assert "Lokal korrigiert liegt die Spanne zwischen 17 und 25 Grad Celsius" in answer
-    assert "Lokal am heissesten um 14:00 UTC" in answer
+    assert "DWD-Prognose eine Temperatur zwischen **18 Grad Celsius** und **27 Grad Celsius**" in answer
+    assert "gegen 15:00 UTC" in answer
+    assert "Lokal korrigiert schaetzt das Modell eher **17 Grad Celsius** bis **25 Grad Celsius**" in answer
+    assert "gegen 14:00 UTC" in answer
+    assert "Tagesverlauf morgen:" not in answer
+    assert "zuletzt gespeicherte Tagesprofil" in answer
 
 
 def _settings() -> Settings:
