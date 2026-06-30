@@ -57,7 +57,10 @@ def read_forecast_rows(path: Path) -> list[dict[str, str]]:
                 if row.get("valid_at"):
                     rows.append({column: row.get(column, "") for column in FORECAST_COLUMNS})
                 continue
-            if saw_forecast:
+            # DWD rows are written through merge_dwd_rows(), which keeps the
+            # forecast block before observation history. If the first data row is
+            # already not a forecast, there is no forecast block to scan for.
+            if kind:
                 break
     return rows
 

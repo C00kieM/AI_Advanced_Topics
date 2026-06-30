@@ -95,19 +95,27 @@ class WeatherStationCsvCache:
             started_at=started_at,
         )
 
-    def observations_since(self, days: int, fields: set[str] | None = None) -> list[LocalObservation]:
+    def observations_since(
+        self,
+        days: int,
+        fields: set[str] | None = None,
+        measurements: set[str] | None = None,
+    ) -> list[LocalObservation]:
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        return self.observations_between(cutoff, datetime.now(timezone.utc), fields=fields)
+        return self.observations_between(cutoff, datetime.now(timezone.utc), fields=fields, measurements=measurements)
 
     def observations_between(
         self,
         start: datetime,
         end: datetime,
         fields: set[str] | None = None,
+        measurements: set[str] | None = None,
     ) -> list[LocalObservation]:
         observations: list[LocalObservation] = []
         for row in read_cache_rows(self.path):
             if fields is not None and row["field"] not in fields:
+                continue
+            if measurements is not None and row["measurement"] not in measurements:
                 continue
             row_time = _row_time(row)
             if row_time is None or row_time < start or row_time >= end:

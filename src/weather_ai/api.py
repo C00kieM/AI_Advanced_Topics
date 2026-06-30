@@ -26,7 +26,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 
-ASSET_VERSION = "20260625-ops3"
+ASSET_VERSION = "20260630-ops4"
 
 
 if FastAPI is not None:

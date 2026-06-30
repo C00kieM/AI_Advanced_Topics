@@ -8,6 +8,7 @@ from typing import Iterable
 import csv
 
 from .config import Settings
+from .ml import features_for_forecast
 from .models import ForecastPoint, MODEL_VARIABLES
 
 
@@ -53,7 +54,10 @@ def corrected_forecasts(forecasts: Iterable[ForecastPoint], model_dir: Path) -> 
         if model is None:
             continue
         try:
-            value = float(model.predict([[forecast.value, forecast.horizon_hours]])[0])
+            try:
+                value = float(model.predict([features_for_forecast(forecast)])[0])
+            except ValueError:
+                value = float(model.predict([[forecast.value, forecast.horizon_hours]])[0])
         except Exception:  # noqa: BLE001 - one bad model should not break raw DWD profiles.
             continue
         corrected.append(

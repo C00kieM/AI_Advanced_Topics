@@ -3,161 +3,210 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Weather Ops Terminal</title>
+    <title>Weather Ops Leitstand</title>
     <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Lokale Wetter-KI</p>
-          <h1>Weather Ops Terminal</h1>
+        <div class="brand-block">
+          <p class="product-kicker">Lokale Wetter-KI</p>
+          <h1>Weather Ops Leitstand</h1>
+          <p class="topbar-copy">
+            Sichere Datenlage, Forecast-Vergleich und Modelltraining fuer den lokalen Standort.
+          </p>
         </div>
-        <div class="topbar-actions">
-          <span class="chip" id="chip-influx"><span class="dot warn"></span>InfluxDB</span>
-          <span class="chip" id="chip-dwd"><span class="dot warn"></span>DWD</span>
-          <button class="icon-button" id="refresh-status" title="Status aktualisieren">Status</button>
+        <div class="topbar-actions" aria-label="Live Quellenstatus">
+          <span class="chip" id="chip-influx"><span class="dot unknown"></span>InfluxDB</span>
+          <span class="chip" id="chip-dwd"><span class="dot unknown"></span>DWD</span>
+          <button class="button button-primary" id="refresh-status" type="button">Live pruefen</button>
         </div>
       </header>
+
+      <section class="signal-grid" aria-label="Systemueberblick">
+        <article class="signal-card" id="signal-influx">
+          <span class="signal-label">InfluxDB</span>
+          <strong id="influx-state">laedt</strong>
+          <small id="influx-url">-</small>
+        </article>
+        <article class="signal-card" id="signal-dwd">
+          <span class="signal-label">DWD Archiv</span>
+          <strong id="dwd-state">laedt</strong>
+          <small id="forecast-valid">-</small>
+        </article>
+        <article class="signal-card" id="signal-cache">
+          <span class="signal-label">Lokale CSV</span>
+          <strong id="local-state">laedt</strong>
+          <small id="cache-max">-</small>
+        </article>
+        <article class="signal-card" id="signal-models">
+          <span class="signal-label">Modellreife</span>
+          <strong id="compare-pairs">0 Paare</strong>
+          <small id="model-files">0 Dateien</small>
+        </article>
+      </section>
 
       <section class="workspace">
         <section class="terminal-panel" aria-label="Ops Terminal">
           <div class="panel-header">
             <div>
               <h2>Ops Terminal</h2>
-              <p>Chat, sichere Kommandos und Job-Logs</p>
+              <p>Freitext geht an den lokalen Chat. Slash-Kommandos starten nur bekannte App-Aktionen.</p>
             </div>
             <div class="terminal-state" id="terminal-state">bereit</div>
           </div>
 
-          <div class="quick-actions" aria-label="Schnellaktionen">
-            <button data-command="/status">Status</button>
-            <button data-command="/sync-local">Sync lokal</button>
-            <button data-command="/sync-dwd">Sync DWD</button>
-            <button data-command="/archive">Archiv</button>
-            <button data-command="/compare">Compare</button>
-            <button data-command="/train">Train</button>
-            <button data-command="/clear">Clear</button>
+          <div class="command-board" aria-label="Schnellaktionen">
+            <button class="command-button" data-command="/status" type="button">
+              <span class="command-code">/status</span>
+              <span>Systemlage</span>
+            </button>
+            <button class="command-button" data-command="/sync-local" type="button">
+              <span class="command-code">/sync-local</span>
+              <span>CSV aktualisieren</span>
+            </button>
+            <button class="command-button" data-command="/sync-dwd" type="button">
+              <span class="command-code">/sync-dwd</span>
+              <span>DWD Historie</span>
+            </button>
+            <button class="command-button" data-command="/archive" type="button">
+              <span class="command-code">/archive</span>
+              <span>Forecast sichern</span>
+            </button>
+            <button class="command-button" data-command="/compare" type="button">
+              <span class="command-code">/compare</span>
+              <span>Abweichung</span>
+            </button>
+            <button class="command-button" data-command="/train" type="button">
+              <span class="command-code">/train</span>
+              <span>Modelle trainieren</span>
+            </button>
+            <button class="command-button command-muted" data-command="/clear" type="button">
+              <span class="command-code">/clear</span>
+              <span>Terminal leeren</span>
+            </button>
           </div>
 
           <div class="terminal-output" id="terminal-output" aria-live="polite"></div>
 
           <form class="terminal-input" id="terminal-form">
-            <span class="prompt">weather-ai</span>
+            <label class="prompt" for="terminal-input">weather-ai</label>
             <input
               id="terminal-input"
               name="command"
               autocomplete="off"
               spellcheck="false"
-              placeholder="Frage stellen oder /status, /sync-local, /sync-dwd, /archive, /compare, /train"
+              placeholder="Frage stellen oder /status, /compare, /train"
             />
-            <button type="submit">Senden</button>
+            <button class="button button-primary" type="submit">Senden</button>
           </form>
         </section>
 
-        <aside class="dashboard" aria-label="Systemstatus">
-          <section class="status-card span-two">
+        <aside class="dashboard" aria-label="Datenstatus">
+          <section class="status-card panel-wide">
             <div class="card-title">
-              <h2>Systemlage</h2>
-              <span id="status-generated">wird geladen</span>
+              <div>
+                <h2>Systemlage</h2>
+                <p id="status-generated">wird geladen</p>
+              </div>
+              <span class="pill muted" id="jobs-state">0 aktiv</span>
             </div>
             <div class="health-grid">
               <div>
                 <span class="label">InfluxDB</span>
-                <strong id="influx-state">lädt</strong>
+                <strong id="influx-health">nicht geprueft</strong>
               </div>
               <div>
                 <span class="label">DWD/MOSMIX</span>
-                <strong id="dwd-state">lädt</strong>
+                <strong id="dwd-health">nicht geprueft</strong>
               </div>
               <div>
-                <span class="label">Lokale Daten</span>
-                <strong id="local-state">lädt</strong>
+                <span class="label">Aktive Station</span>
+                <strong id="local-measurement">-</strong>
               </div>
               <div>
-                <span class="label">Jobs</span>
-                <strong id="jobs-state">0 aktiv</strong>
+                <span class="label">Token</span>
+                <strong id="influx-token">-</strong>
               </div>
             </div>
           </section>
 
           <section class="status-card">
-            <div class="card-title">
+            <div class="card-title compact-title">
               <h3>InfluxDB</h3>
-              <span class="dot warn" id="influx-dot"></span>
+              <span class="dot unknown" id="influx-dot"></span>
             </div>
-            <dl>
-              <div><dt>URL</dt><dd id="influx-url">lädt</dd></div>
-              <div><dt>Bucket</dt><dd id="influx-bucket">lädt</dd></div>
-              <div><dt>Measurement</dt><dd id="local-measurement">lädt</dd></div>
-              <div><dt>Token</dt><dd id="influx-token">lädt</dd></div>
+            <dl class="data-list">
+              <div><dt>Org</dt><dd id="influx-org">-</dd></div>
+              <div><dt>Bucket</dt><dd id="influx-bucket">-</dd></div>
+              <div><dt>Messung</dt><dd id="local-measurement-detail">-</dd></div>
             </dl>
           </section>
 
           <section class="status-card">
-            <div class="card-title">
+            <div class="card-title compact-title">
               <h3>DWD</h3>
-              <span class="dot warn" id="dwd-dot"></span>
+              <span class="dot unknown" id="dwd-dot"></span>
             </div>
-            <dl>
-              <div><dt>MOSMIX</dt><dd id="mosmix-station">lädt</dd></div>
-              <div><dt>Produkt</dt><dd id="mosmix-product">lädt</dd></div>
-              <div><dt>Forecasts</dt><dd id="forecast-rows">lädt</dd></div>
-              <div><dt>Valid bis</dt><dd id="forecast-valid">lädt</dd></div>
+            <dl class="data-list">
+              <div><dt>MOSMIX</dt><dd id="mosmix-station">-</dd></div>
+              <div><dt>Produkt</dt><dd id="mosmix-product">-</dd></div>
+              <div><dt>Forecasts</dt><dd id="forecast-rows">-</dd></div>
+              <div><dt>Dateigroesse</dt><dd id="dwd-size">-</dd></div>
             </dl>
           </section>
 
           <section class="status-card">
-            <div class="card-title">
+            <div class="card-title compact-title">
               <h3>Lokale CSV</h3>
-              <span id="cache-stale" class="pill warn">lädt</span>
+              <span id="cache-stale" class="pill muted">laedt</span>
             </div>
-            <dl>
-              <div><dt>Zeilen</dt><dd id="cache-rows">lädt</dd></div>
-              <div><dt>Von</dt><dd id="cache-min">lädt</dd></div>
-              <div><dt>Bis</dt><dd id="cache-max">lädt</dd></div>
-              <div><dt>Geändert</dt><dd id="cache-modified">lädt</dd></div>
+            <dl class="data-list">
+              <div><dt>Gesamtzeilen</dt><dd id="cache-rows">-</dd></div>
+              <div><dt>Stationszeilen</dt><dd id="cache-selected-rows">-</dd></div>
+              <div><dt>Von</dt><dd id="cache-min">-</dd></div>
+              <div><dt>Geaendert</dt><dd id="cache-modified">-</dd></div>
             </dl>
           </section>
 
           <section class="status-card">
-            <div class="card-title">
+            <div class="card-title compact-title">
               <h3>Vergleich</h3>
-              <span id="compare-pairs" class="pill muted">0 Paare</span>
+              <span id="compare-ready" class="pill muted">wartet</span>
             </div>
             <div class="metric-stack" id="comparison-metrics">
               <div class="empty">Noch nicht berechnet. Nutze /compare.</div>
             </div>
           </section>
 
-          <section class="status-card span-two">
-            <div class="card-title">
+          <section class="status-card panel-wide">
+            <div class="card-title compact-title">
               <h3>Modelle</h3>
-              <span id="model-files" class="pill muted">0 Dateien</span>
+              <span id="model-readiness" class="pill muted">0 bereit</span>
             </div>
             <div class="model-grid" id="model-grid">
               <div class="empty">Modellstatus wird geladen.</div>
             </div>
           </section>
 
-          <section class="status-card span-two">
-            <div class="card-title">
+          <section class="status-card panel-wide">
+            <div class="card-title compact-title">
               <h3>Warnungen</h3>
               <span id="warning-count" class="pill muted">0</span>
             </div>
             <ul class="warnings" id="warnings"><li class="empty">Status wird geladen.</li></ul>
           </section>
 
-          <section class="status-card span-two">
-            <div class="card-title">
+          <section class="status-card panel-wide">
+            <div class="card-title compact-title">
               <h3>Laufzeiten</h3>
               <span id="timing-count" class="pill muted">0</span>
             </div>
             <div class="timing-list" id="timing-list"><div class="empty">Noch keine Kommandos gemessen.</div></div>
           </section>
 
-          <section class="status-card span-two">
-            <div class="card-title">
+          <section class="status-card panel-wide">
+            <div class="card-title compact-title">
               <h3>Job Monitor</h3>
               <span id="job-count" class="pill muted">0</span>
             </div>

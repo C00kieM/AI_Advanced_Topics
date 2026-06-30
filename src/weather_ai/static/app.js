@@ -6,6 +6,12 @@ const state = {
   timings: [],
 };
 
+const labels = {
+  temperature: "Temperatur",
+  precipitation: "Niederschlag",
+  wind_speed: "Wind",
+};
+
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -40,14 +46,14 @@ function bindUi() {
     button.addEventListener("click", () => runTerminalInput(button.dataset.command));
   });
 
-  $("refresh-status").addEventListener("click", () => runTerminalInput("/status"));
+  $("refresh-status").addEventListener("click", () => refreshStatus(true));
 }
 
 function bootTerminal() {
-  appendLine("system", "Weather Ops Terminal bereit.");
+  appendLine("system", "Weather Ops Leitstand bereit.");
   appendLine(
     "system",
-    "Erlaubte Kommandos: /status, /sync-local, /sync-dwd, /archive, /compare, /train, /clear. Freitext geht an den lokalen Chat."
+    "Erlaubte Kommandos: /status, /sync-local, /sync-dwd, /archive, /compare, /train, /clear. Keine Betriebssystem-Shell."
   );
 }
 
@@ -55,7 +61,7 @@ async function runTerminalInput(value) {
   remember(value);
   appendLine("user", `> ${value}`);
   if (value === "/clear") {
-    $("terminal-output").innerHTML = "";
+    $("terminal-output").replaceChildren();
     bootTerminal();
     return;
   }
@@ -108,9 +114,9 @@ async function askChat(question) {
 }
 
 async function refreshStatus(live) {
-  setTerminalState("status");
+  setTerminalState(live ? "live" : "status");
   try {
-    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 90000 });
+    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 10000 });
     renderStatus(status);
     if (status.live?.warnings?.length) {
       appendLine("warning", `Status mit ${status.live.warnings.length} Warnung(en) aktualisiert.`);
@@ -182,31 +188,43 @@ function renderStatus(payload) {
   const comparison = payload.comparison || {};
   const models = payload.models || {};
   const liveChecked = live.checked !== false;
+  const influxTone = liveChecked ? (live.influx_ok ? "good" : "bad") : "unknown";
+  const dwdTone = liveChecked ? (live.dwd_ok ? "good" : "bad") : "unknown";
+  const cacheTone = !localCache.exists ? "bad" : localCache.stale ? "warn" : "good";
+  const forecastCount = Number(dwd.forecast_rows || 0);
+  const pairCount = Number(comparison.pairs || 0);
 
-  setChip("chip-influx", liveChecked ? (live.influx_ok ? "good" : "bad") : "unknown", "InfluxDB");
-  setChip("chip-dwd", liveChecked ? (live.dwd_ok ? "good" : "bad") : "unknown", "DWD");
-  setDot("influx-dot", liveChecked ? (live.influx_ok ? "good" : "bad") : "unknown");
-  setDot("dwd-dot", liveChecked ? (live.dwd_ok ? "good" : "bad") : "unknown");
+  setChip("chip-influx", influxTone, "InfluxDB");
+  setChip("chip-dwd", dwdTone, "DWD");
+  setDot("influx-dot", influxTone);
+  setDot("dwd-dot", dwdTone);
 
-  $("status-generated").textContent = formatDate(payload.generated_at);
-  $("influx-state").textContent = liveChecked ? (live.influx_ok ? "OK" : "Fehler") : "nicht geprüft";
-  $("dwd-state").textContent = liveChecked ? (live.dwd_ok ? "OK" : "Fehler") : "nicht geprüft";
-  $("local-state").textContent = localCache.stale ? "veraltet" : "aktuell";
+  setSignal("signal-influx", influxTone, "influx-state", liveChecked ? (live.influx_ok ? "OK" : "Fehler") : "nicht geprueft");
+  setSignal("signal-dwd", forecastCount > 0 ? "good" : dwd.exists ? "warn" : "bad", "dwd-state", forecastCount > 0 ? `${number(forecastCount)} Forecasts` : dwd.exists ? "nur Historie" : "fehlt");
+  setSignal("signal-cache", cacheTone, "local-state", !localCache.exists ? "fehlt" : localCache.stale ? "veraltet" : "aktuell");
+  setSignal("signal-models", pairCount > 0 ? "good" : "warn", "compare-pairs", `${number(pairCount)} Paare`);
 
-  $("influx-url").textContent = config.influx_url || "-";
-  $("influx-bucket").textContent = config.influx_bucket || "-";
-  $("local-measurement").textContent = config.local_measurement || "-";
-  $("influx-token").textContent = config.influx_token || "-";
-  $("mosmix-station").textContent = config.mosmix_station_id || config.dwd_station_id || "-";
-  $("mosmix-product").textContent = config.mosmix_product || "-";
-  $("forecast-rows").textContent = number(dwd.forecast_rows);
-  $("forecast-valid").textContent = formatDate(dwd.max_valid_at);
+  setText("status-generated", `Stand ${formatDate(payload.generated_at)}`);
+  setText("influx-health", liveChecked ? (live.influx_ok ? "OK" : "Fehler") : "nicht geprueft");
+  setText("dwd-health", liveChecked ? (live.dwd_ok ? "OK" : "Fehler") : "nicht geprueft");
+  setText("influx-url", config.influx_url || "-");
+  setText("influx-org", config.influx_org || "-");
+  setText("influx-bucket", config.influx_bucket || "-");
+  setText("local-measurement", config.local_measurement || "-");
+  setText("local-measurement-detail", config.local_measurement || "-");
+  setText("influx-token", config.influx_token || "-");
+  setText("mosmix-station", config.mosmix_station_id || config.dwd_station_id || "-");
+  setText("mosmix-product", config.mosmix_product || "-");
+  setText("forecast-rows", number(dwd.forecast_rows));
+  setText("forecast-valid", forecastCount > 0 ? `gueltig bis ${formatDate(dwd.max_valid_at)}` : "keine Forecasts archiviert");
+  setText("dwd-size", bytes(dwd.size_bytes));
 
-  $("cache-rows").textContent = number(localCache.rows);
-  $("cache-min").textContent = formatDate(localCache.min_time);
-  $("cache-max").textContent = formatDate(localCache.max_time);
-  $("cache-modified").textContent = formatDate(localCache.last_modified);
-  setPill("cache-stale", localCache.stale ? "warn" : "good", localCache.stale ? "veraltet" : "aktuell");
+  setText("cache-rows", number(localCache.rows));
+  setText("cache-selected-rows", number(localCache.selected_rows));
+  setText("cache-min", formatDate(localCache.selected_min_time || localCache.min_time));
+  setText("cache-max", localCache.selected_max_time ? `bis ${formatDate(localCache.selected_max_time)}` : "keine Stationsdaten");
+  setText("cache-modified", formatDate(localCache.last_modified));
+  setPill("cache-stale", cacheTone, !localCache.exists ? "fehlt" : localCache.stale ? "veraltet" : "aktuell");
 
   renderComparison(comparison);
   renderModels(models);
@@ -214,75 +232,100 @@ function renderStatus(payload) {
 }
 
 function renderComparison(comparison) {
-  $("compare-pairs").textContent = `${number(comparison.pairs || 0)} Paare`;
+  const pairCount = Number(comparison.pairs || 0);
+  setText("compare-pairs", `${number(pairCount)} Paare`);
+  setPill("compare-ready", pairCount > 0 ? "good" : "warn", pairCount > 0 ? "berechnet" : "keine Paare");
   const host = $("comparison-metrics");
   const summary = comparison.summary || {};
   const keys = Object.keys(summary);
   if (!keys.length) {
-    host.innerHTML = `<div class="empty">${comparison.computed === false ? "Noch nicht berechnet. Nutze /compare." : "Noch keine verwertbaren Forecast-vs-Ist-Paare."}</div>`;
+    host.replaceChildren(el("div", { className: "empty" }, comparison.computed === false ? "Noch nicht berechnet. Nutze /compare." : "Noch keine verwertbaren Forecast-vs-Ist-Paare."));
     return;
   }
-  host.innerHTML = keys
-    .map((key) => {
-      const item = summary[key];
-      return `<div class="metric-item"><strong>${label(key)}</strong><span>Count ${number(item.count)} - MAE ${round(item.mae)} - Bias ${round(item.bias)}</span></div>`;
+  host.replaceChildren(
+    ...keys.map((key) => {
+      const item = summary[key] || {};
+      return el(
+        "div",
+        { className: "metric-item" },
+        el("div", { className: "metric-head" }, el("strong", {}, label(key)), el("span", { className: "pill info" }, `${number(item.count)} Paare`)),
+        el(
+          "div",
+          { className: "metric-grid" },
+          metric("MAE", round(item.mae)),
+          metric("RMSE", round(item.rmse)),
+          metric("Bias", signed(item.bias))
+        )
+      );
     })
-    .join("");
+  );
 }
 
 function renderModels(models) {
   const files = models.files || [];
-  $("model-files").textContent = `${files.length} Dateien`;
+  setText("model-files", `${files.length} Dateien`);
   const trainability = models.trainability || {};
-  const host = $("model-grid");
   const keys = Object.keys(trainability);
+  const readyCount = keys.filter((key) => trainability[key]?.ready).length;
+  const trainedCount = keys.filter((key) => trainability[key]?.trained).length;
+  setPill("model-readiness", readyCount > 0 ? "good" : "warn", `${readyCount} trainierbar`);
+  const host = $("model-grid");
   if (!keys.length) {
-    host.innerHTML = `<div class="empty">Keine Modellinformationen vorhanden.</div>`;
+    host.replaceChildren(el("div", { className: "empty" }, "Keine Modellinformationen vorhanden."));
     return;
   }
-  host.innerHTML = keys
-    .map((key) => {
-      const item = trainability[key];
-      const className = item.ready ? "good" : "warn";
-      const text = item.ready ? "trainierbar" : "zu wenig Daten";
-      return `<div class="model-item"><strong>${label(key)}</strong><span class="pill ${className}">${text}</span><span>${number(item.points)} / ${number(item.required)} Punkte</span></div>`;
+  host.replaceChildren(
+    ...keys.map((key) => {
+      const item = trainability[key] || {};
+      const tone = item.trained ? "good" : item.ready ? "warn" : "bad";
+      const stateText = item.trained ? "trainiert" : item.ready ? "bereit" : "zu wenig Daten";
+      const latest = item.latest_model?.last_modified ? formatDate(item.latest_model.last_modified) : "kein Modell";
+      return el(
+        "div",
+        { className: `model-item ${tone}` },
+        el("strong", {}, label(key)),
+        el("span", { className: `pill ${tone}` }, stateText),
+        el("span", {}, `${number(item.points)} / ${number(item.required)} Punkte`),
+        el("span", {}, latest)
+      );
     })
-    .join("");
+  );
+  setText("model-files", `${files.length} Dateien, ${trainedCount} aktiv`);
 }
 
 function renderWarnings(warnings) {
-  $("warning-count").textContent = String(warnings.length);
+  setText("warning-count", String(warnings.length));
   const host = $("warnings");
   if (!warnings.length) {
-    host.innerHTML = `<li class="empty">Keine Warnungen.</li>`;
+    host.replaceChildren(el("li", { className: "empty" }, "Keine Warnungen."));
     return;
   }
-  host.innerHTML = warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("");
+  host.replaceChildren(...warnings.map((warning) => el("li", {}, warning)));
 }
 
 function renderJobs(jobs) {
-  const allJobs = mergeJobs(jobs);
+  const allJobs = [...jobs].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
   const active = allJobs.filter((job) => ["queued", "running"].includes(job.status)).length;
-  $("jobs-state").textContent = `${active} aktiv`;
-  $("job-count").textContent = String(allJobs.length);
+  setText("jobs-state", `${active} aktiv`);
+  setText("job-count", String(allJobs.length));
   const host = $("job-list");
   if (!allJobs.length) {
-    host.innerHTML = `<div class="empty">Keine Jobs gestartet.</div>`;
+    host.replaceChildren(el("div", { className: "empty" }, "Keine Jobs gestartet."));
     return;
   }
-  host.innerHTML = allJobs
-    .slice(0, 8)
-    .map((job) => {
-      const statusClass = job.status === "succeeded" && !job.result?.warning ? "good" : job.status === "failed" ? "bad" : "warn";
-      return `<div class="job-item"><strong>${escapeHtml(job.name)}</strong><span class="pill ${statusClass}">${job.status}</span><span>${job.id} - ${formatDate(job.created_at)}</span><span>Laufzeit ${formatSeconds(job.duration_seconds)}</span></div>`;
+  host.replaceChildren(
+    ...allJobs.slice(0, 8).map((job) => {
+      const tone = job.status === "succeeded" && !job.result?.warning ? "good" : job.status === "failed" ? "bad" : "warn";
+      return el(
+        "div",
+        { className: "job-item" },
+        el("div", { className: "job-head" }, el("strong", {}, job.name), el("span", { className: `pill ${tone}` }, job.status)),
+        el("span", {}, job.id),
+        el("span", {}, formatDate(job.created_at)),
+        el("span", {}, `Laufzeit ${formatSeconds(job.duration_seconds)}`)
+      );
     })
-    .join("");
-}
-
-function mergeJobs(newJobs) {
-  const existing = new Map();
-  document.querySelectorAll(".job-item").forEach(() => {});
-  return [...newJobs].sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+  );
 }
 
 async function api(path, options = {}) {
@@ -325,31 +368,69 @@ function recallHistory(direction) {
 
 function appendLine(kind, text) {
   const output = $("terminal-output");
-  const line = document.createElement("div");
-  line.className = `line ${kind}`;
-  line.innerHTML = renderTerminalText(text);
+  const line = el("div", { className: `line ${kind}` });
+  appendFormattedText(line, text);
   output.appendChild(line);
   output.scrollTop = output.scrollHeight;
 }
 
+function appendFormattedText(target, value) {
+  const parts = String(value).split(/(\*\*[^*\n]+\*\*)/g);
+  parts.forEach((part) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      target.appendChild(el("strong", {}, part.slice(2, -2)));
+    } else if (part) {
+      target.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
 function setTerminalState(value) {
-  $("terminal-state").textContent = value;
+  setText("terminal-state", value);
 }
 
-function setChip(id, stateName, labelText) {
-  const element = $(id);
-  element.innerHTML = `<span class="dot ${stateName}"></span>${labelText}`;
+function setChip(id, tone, text) {
+  $(id).replaceChildren(el("span", { className: `dot ${tone}` }), document.createTextNode(text));
 }
 
-function setDot(id, stateName) {
-  const element = $(id);
-  element.className = `dot ${stateName}`;
+function setDot(id, tone) {
+  $(id).className = `dot ${tone}`;
 }
 
-function setPill(id, stateName, text) {
+function setPill(id, tone, text) {
   const element = $(id);
-  element.className = `pill ${stateName}`;
+  element.className = `pill ${tone}`;
   element.textContent = text;
+}
+
+function setSignal(cardId, tone, valueId, text) {
+  const card = $(cardId);
+  card.className = `signal-card ${tone}`;
+  setText(valueId, text);
+}
+
+function setText(id, value) {
+  const element = $(id);
+  if (element) {
+    element.textContent = value ?? "-";
+  }
+}
+
+function metric(name, value) {
+  return el("span", {}, name, el("span", { className: "metric-value" }, value));
+}
+
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  Object.entries(props).forEach(([key, value]) => {
+    if (key === "className") node.className = value;
+    else node.setAttribute(key, value);
+  });
+  children.flat().forEach((child) => {
+    if (child === null || child === undefined) return;
+    node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+  });
+  return node;
 }
 
 function formatJson(value) {
@@ -373,31 +454,27 @@ function number(value) {
 }
 
 function round(value) {
+  if (value === null || value === undefined || value === "") return "-";
   const parsed = Number(value || 0);
   return parsed.toLocaleString("de-DE", { maximumFractionDigits: 2 });
 }
 
+function signed(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const parsed = Number(value || 0);
+  return `${parsed > 0 ? "+" : ""}${parsed.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
+}
+
+function bytes(value) {
+  const parsed = Number(value || 0);
+  if (!parsed) return "-";
+  if (parsed < 1024) return `${parsed} B`;
+  if (parsed < 1024 * 1024) return `${(parsed / 1024).toLocaleString("de-DE", { maximumFractionDigits: 1 })} KB`;
+  return `${(parsed / 1024 / 1024).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB`;
+}
+
 function label(key) {
-  return (
-    {
-      temperature: "Temperatur",
-      precipitation: "Niederschlag",
-      wind_speed: "Wind",
-    }[key] || key
-  );
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function renderTerminalText(value) {
-  return escapeHtml(value).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  return labels[key] || key;
 }
 
 function recordTiming(labelText, durationMs, kind) {
@@ -412,18 +489,22 @@ function recordTiming(labelText, durationMs, kind) {
 }
 
 function renderTimings() {
-  $("timing-count").textContent = String(state.timings.length);
+  setText("timing-count", String(state.timings.length));
   const host = $("timing-list");
   if (!state.timings.length) {
-    host.innerHTML = `<div class="empty">Noch keine Kommandos gemessen.</div>`;
+    host.replaceChildren(el("div", { className: "empty" }, "Noch keine Kommandos gemessen."));
     return;
   }
-  host.innerHTML = state.timings
-    .map(
-      (item) =>
-        `<div class="timing-item"><strong>${escapeHtml(item.label)}</strong><span>${formatDuration(item.durationMs)} - ${escapeHtml(item.kind)} - ${formatDate(item.at)}</span></div>`
+  host.replaceChildren(
+    ...state.timings.map((item) =>
+      el(
+        "div",
+        { className: "timing-item" },
+        el("strong", {}, item.label),
+        el("span", {}, `${formatDuration(item.durationMs)} - ${item.kind} - ${formatDate(item.at)}`)
+      )
     )
-    .join("");
+  );
 }
 
 function formatDuration(durationMs) {

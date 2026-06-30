@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import timedelta
+from math import sqrt
 
 from .models import ComparisonPoint, ForecastPoint, LocalObservation, MODEL_VARIABLES
 
@@ -74,9 +75,14 @@ def summarize_comparisons(comparisons: list[ComparisonPoint]) -> dict[str, dict[
         items = [item for item in comparisons if item.variable == variable]
         abs_errors = [abs(item.error) for item in items]
         signed_errors = [item.error for item in items]
+        squared_errors = [item.error * item.error for item in items]
+        horizons = [item.horizon_hours for item in items]
         summary[variable] = {
             "count": float(len(items)),
             "mae": sum(abs_errors) / len(abs_errors) if abs_errors else 0.0,
+            "rmse": sqrt(sum(squared_errors) / len(squared_errors)) if squared_errors else 0.0,
             "bias": sum(signed_errors) / len(signed_errors) if signed_errors else 0.0,
+            "min_horizon_hours": min(horizons) if horizons else 0.0,
+            "max_horizon_hours": max(horizons) if horizons else 0.0,
         }
     return summary

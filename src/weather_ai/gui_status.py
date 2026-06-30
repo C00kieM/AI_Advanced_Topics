@@ -13,7 +13,7 @@ from .config import Settings
 from .diagnostics import build_status
 from .forecast_archive import ForecastCsvArchive, read_forecast_rows, row_to_forecast
 from .local_cache import WeatherStationCsvCache, read_cache_rows
-from .models import ForecastPoint, MODEL_VARIABLES, StatusReport
+from .models import ForecastPoint, LOCAL_FIELD_MAP, MODEL_VARIABLES, StatusReport
 
 
 TRAINING_MIN_POINTS = 24
@@ -22,7 +22,7 @@ _DWD_CACHE: dict[tuple[str, int, float], tuple[dict[str, Any], list[ForecastPoin
 
 def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) -> dict[str, Any]:
     report = _safe_status_report(settings) if live else StatusReport()
-    local_cache = summarize_local_cache(settings.local_cache_path)
+    local_cache = summarize_local_cache(settings.local_cache_path, selected_measurement=settings.local_measurement)
     dwd_data, forecasts = summarize_dwd_data(settings.dwd_data_path, deep=deep)
     comparison = summarize_cached_comparison(settings, forecasts)
     models = summarize_models(settings.model_dir, comparison["counts"])
@@ -62,12 +62,16 @@ def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) 
     }
 
 
-def summarize_local_cache(path: Path) -> dict[str, Any]:
+def summarize_local_cache(path: Path, selected_measurement: str | None = None) -> dict[str, Any]:
     rows = read_cache_rows(path)
     measurement_counts = Counter(row["measurement"] for row in rows)
     field_counts = Counter(row["field"] for row in rows)
     times = [_parse_time(row.get("time", "")) for row in rows]
     valid_times = [item for item in times if item is not None]
+    selected_rows = [row for row in rows if row.get("measurement") == selected_measurement] if selected_measurement else []
+    selected_times = [_parse_time(row.get("time", "")) for row in selected_rows]
+    selected_valid_times = [item for item in selected_times if item is not None]
+    active_latest = max(selected_valid_times) if selected_valid_times else None
     return {
         "path": str(path),
         "exists": path.exists(),
@@ -77,7 +81,11 @@ def summarize_local_cache(path: Path) -> dict[str, Any]:
         "last_modified": _mtime(path),
         "measurements": dict(measurement_counts.most_common()),
         "fields": dict(field_counts.most_common()),
-        "stale": _is_stale(max(valid_times) if valid_times else None),
+        "selected_measurement": selected_measurement,
+        "selected_rows": len(selected_rows),
+        "selected_min_time": min(selected_valid_times).isoformat() if selected_valid_times else None,
+        "selected_max_time": active_latest.isoformat() if active_latest else None,
+        "stale": _is_stale(active_latest),
     }
 
 
@@ -180,8 +188,11 @@ def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoin
         }
     try:
         forecasts = forecasts if forecasts is not None else ForecastCsvArchive(settings).read()
+        model_fields = {LOCAL_FIELD_MAP[variable] for variable in MODEL_VARIABLES}
         observations = WeatherStationCsvCache(settings).observations_since(
-            days=_observation_days_for_forecasts(settings, forecasts)
+            days=_observation_days_for_forecasts(settings, forecasts),
+            fields=model_fields,
+            measurements={settings.local_measurement},
         )
         comparisons = match_forecasts_to_observations(forecasts, observations)
     except Exception as exc:  # noqa: BLE001 - GUI status should still render.
@@ -217,6 +228,21 @@ def _observation_days_for_forecasts(settings: Settings, forecasts: list[Forecast
 
 def summarize_models(model_dir: Path, comparison_counts: dict[str, int]) -> dict[str, Any]:
     model_files = sorted(model_dir.glob("*.joblib")) if model_dir.exists() else []
+    latest_by_variable: dict[str, dict[str, Any]] = {}
+    for variable in sorted(MODEL_VARIABLES):
+        candidates = [
+            path
+            for path in model_files
+            if path.name.startswith(f"{variable}-")
+        ]
+        if not candidates:
+            continue
+        latest = max(candidates, key=lambda path: path.stat().st_mtime)
+        latest_by_variable[variable] = {
+            "name": latest.name,
+            "path": str(latest),
+            "last_modified": _mtime(latest),
+        }
     return {
         "path": str(model_dir),
         "exists": model_dir.exists(),
@@ -228,11 +254,14 @@ def summarize_models(model_dir: Path, comparison_counts: dict[str, int]) -> dict
             }
             for path in model_files
         ],
+        "latest_by_variable": latest_by_variable,
         "trainability": {
             variable: {
                 "points": comparison_counts.get(variable, 0),
                 "required": TRAINING_MIN_POINTS,
                 "ready": comparison_counts.get(variable, 0) >= TRAINING_MIN_POINTS,
+                "trained": variable in latest_by_variable,
+                "latest_model": latest_by_variable.get(variable),
             }
             for variable in sorted(MODEL_VARIABLES)
         },

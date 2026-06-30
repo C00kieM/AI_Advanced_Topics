@@ -89,4 +89,8 @@ class WeatherService:
 
     def _local_training_rows(self, since_days: int) -> list[LocalObservation]:
         model_fields = {LOCAL_FIELD_MAP[variable] for variable in MODEL_VARIABLES}
-        return self.local_cache.observations_since(days=since_days, fields=model_fields)
+        return self.local_cache.observations_since(
+            days=since_days,
+            fields=model_fields,
+            measurements={self.settings.local_measurement},
+        )

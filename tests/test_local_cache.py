@@ -107,6 +107,34 @@ def test_cache_observations_between_filters_date_range_and_fields():
     assert observations[0].value == 2.5
 
 
+def test_cache_observations_between_filters_measurements():
+    settings = replace(Settings.from_env(), local_cache_path=Path("unused.csv"))
+    rows = [
+        {
+            "time": "2026-01-01T00:00:00+00:00",
+            "measurement": "target",
+            "field": "Lufttemperatur",
+            "value": "2.5",
+        },
+        {
+            "time": "2026-01-01T00:00:00+00:00",
+            "measurement": "other",
+            "field": "Lufttemperatur",
+            "value": "8.0",
+        },
+    ]
+
+    with patch("weather_ai.local_cache.read_cache_rows", return_value=rows):
+        observations = WeatherStationCsvCache(settings).observations_between(
+            datetime(2026, 1, 1, tzinfo=timezone.utc),
+            datetime(2026, 1, 2, tzinfo=timezone.utc),
+            measurements={"target"},
+        )
+
+    assert len(observations) == 1
+    assert observations[0].measurement == "target"
+
+
 def test_cache_sync_keeps_existing_cache_when_influx_is_unreachable():
     existing_rows = [
         {
