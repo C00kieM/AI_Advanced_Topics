@@ -4,12 +4,15 @@ from threading import Thread
 from time import monotonic, sleep
 import os
 from pathlib import Path
+import secrets
 import socket
+from urllib.parse import quote
 import urllib.request
 
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+WINDOW_TITLE = "Weather Ops Admin View"
 
 
 def main() -> None:
@@ -20,9 +23,10 @@ def main() -> None:
 
     from .api import create_app
 
-    app = create_app(sync_on_startup=False)
+    gui_token = secrets.token_urlsafe(24)
+    app = create_app(sync_on_startup=False, gui_enabled=True, gui_token=gui_token)
     server = _start_server(app, host, port)
-    url = f"http://{host}:{port}/"
+    url = f"http://{host}:{port}/?gui_token={quote(gui_token)}"
     _wait_for_server(url)
 
     try:
@@ -36,11 +40,11 @@ def main() -> None:
 
     try:
         webview.create_window(
-            "Weather Ops Terminal",
+            WINDOW_TITLE,
             url,
-            width=1440,
-            height=940,
-            min_size=(1100, 720),
+            width=1380,
+            height=880,
+            min_size=(980, 680),
             text_select=True,
         )
         webview.start(private_mode=False, storage_path=str(_webview_storage_path()))

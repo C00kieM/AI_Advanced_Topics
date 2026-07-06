@@ -1,0 +1,5 @@
+kind,time,station_id,dataset,field,value,quality,source_url,source,issued_at,valid_at,horizon_hours,unit,raw_name
+forecast,2026-06-01T00:00:00+00:00,10513,forecast,temperature,20,,,dwd,2026-06-01T00:00:00+00:00,2026-06-02T06:00:00+00:00,30,degC,TTT
+forecast,2026-06-01T00:00:00+00:00,10513,forecast,temperature,24,,,dwd,2026-06-01T00:00:00+00:00,2026-06-02T12:00:00+00:00,36,degC,TTT
+observation,2024-01-01T00:00:00+00:00,02667,air_temperature,TT_10,5,1,http://example,,,,,
+observation,2026-01-01T00:00:00+00:00,02667,air_temperature,TT_10,8,1,http://example,,,,,

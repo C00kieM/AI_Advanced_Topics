@@ -4,6 +4,8 @@ const state = {
   jobLogCounts: new Map(),
   polling: new Map(),
   timings: [],
+  pendingCommand: null,
+  refreshing: false,
 };
 
 const labels = {
@@ -16,22 +18,51 @@ const $ = (id) => document.getElementById(id);
 
 document.addEventListener("DOMContentLoaded", () => {
   bindUi();
+  setView(new URLSearchParams(window.location.search).get("view"));
   bootTerminal();
-  refreshStatus(false);
-  refreshJobs();
+  refreshAll(false);
+  setInterval(() => refreshAll(false, { quiet: true }), 15000);
+  setInterval(() => refreshJobs({ quiet: true }), 3000);
 });
 
 function bindUi() {
   $("terminal-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    const input = $("terminal-input");
-    const value = input.value.trim();
-    if (!value) return;
-    input.value = "";
-    runTerminalInput(value);
+    submitInput($("terminal-input"), "ops");
   });
 
-  $("terminal-input").addEventListener("keydown", (event) => {
+  $("chat-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitInput($("chat-input"), "chat");
+  });
+
+  bindHistory($("terminal-input"));
+  bindHistory($("chat-input"));
+
+  document.querySelectorAll("[data-command]").forEach((button) => {
+    button.addEventListener("click", () => runTerminalInput(button.dataset.command, "ops"));
+  });
+
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  });
+
+  document.querySelectorAll("[data-open-file]").forEach((button) => {
+    button.addEventListener("click", () => openDataFile(button.dataset.openFile, button));
+  });
+
+  $("refresh-status").addEventListener("click", () => refreshAll(true));
+}
+
+function submitInput(input, source) {
+  const value = input.value.trim();
+  if (!value) return;
+  input.value = "";
+  runTerminalInput(value, source);
+}
+
+function bindHistory(input) {
+  input.addEventListener("keydown", (event) => {
     if (event.key === "ArrowUp") {
       event.preventDefault();
       recallHistory(-1);
@@ -41,104 +72,140 @@ function bindUi() {
       recallHistory(1);
     }
   });
-
-  document.querySelectorAll("[data-command]").forEach((button) => {
-    button.addEventListener("click", () => runTerminalInput(button.dataset.command));
-  });
-
-  $("refresh-status").addEventListener("click", () => refreshStatus(true));
 }
 
-function bootTerminal() {
-  appendLine("system", "Weather Ops Leitstand bereit.");
-  appendLine(
-    "system",
-    "Erlaubte Kommandos: /status, /sync-local, /sync-dwd, /archive, /compare, /train, /clear. Keine Betriebssystem-Shell."
-  );
-}
-
-async function runTerminalInput(value) {
-  remember(value);
-  appendLine("user", `> ${value}`);
-  if (value === "/clear") {
-    $("terminal-output").replaceChildren();
-    bootTerminal();
-    return;
+function bootTerminal(source = "all") {
+  if (source === "all" || source === "ops") {
+    appendTerminalLine("system", "Weather Ops Admin View bereit.");
+    appendTerminalLine(
+      "system",
+      "Nutze /info fuer Befehle. Freitext und Slash-Kommandos laufen ueber den lokalen KI-Chat."
+    );
   }
-  setTerminalState("arbeitet");
-  const startedAt = performance.now();
+  if (source === "all" || source === "chat") {
+    appendChatLine("system", "Hallo, ich bin dein Wetterassistent. Frag mich nach Prognosen, vergangenen Tagen oder einer bestimmten Station.");
+  }
+}
+
+async function openDataFile(target, button) {
+  if (!target) return;
+  const oldDisabled = button?.disabled;
+  if (button) button.disabled = true;
+  setTerminalState("oeffnet");
   try {
-    if (value.startsWith("/")) {
-      await runCommand(value);
-    } else {
-      await askChat(value);
-    }
+    const payload = await api("/files/open", {
+      method: "POST",
+      body: JSON.stringify({ target }),
+      timeout: 10000,
+    });
+    appendTerminalLine("success", `${payload.label || "Datei"} wurde geoeffnet.`);
   } catch (error) {
-    appendLine("error", error.message || String(error));
+    appendTerminalLine("error", `Datei konnte nicht geoeffnet werden: ${error.message || error}`);
   } finally {
-    const durationMs = performance.now() - startedAt;
-    recordTiming(value.startsWith("/") ? value : "Chat", durationMs, "terminal");
-    appendLine("system", `Dauer ${formatDuration(durationMs)} fuer ${value.startsWith("/") ? value : "Chat"}.`);
+    if (button) button.disabled = Boolean(oldDisabled);
     setTerminalState("bereit");
   }
 }
 
-async function runCommand(command) {
-  const response = await api("/terminal/command", {
-    method: "POST",
-    body: JSON.stringify({ command }),
-  });
-  if (response.type === "clear") return;
-  if (response.type === "status") {
-    renderStatus(response.status);
-    appendLine("success", "Status aktualisiert.");
-    return;
-  }
-  if (response.type === "comparison") {
-    renderComparison(response.comparison);
-    appendLine("system", formatJson(response.comparison));
-    return;
-  }
-  if (response.type === "job") {
-    announceJob(response.job);
-    pollJob(response.job.id);
+async function runTerminalInput(value, source = "ops") {
+  remember(value);
+  appendToSource(source, "user", `> ${value}`);
+  const commandFromConfirmation = resolvePendingConfirmation(value, source);
+  if (commandFromConfirmation === false) return;
+  const submittedValue = commandFromConfirmation || value;
+  setTerminalState("arbeitet");
+  const startedAt = performance.now();
+  try {
+    const response = await askChat(submittedValue);
+    await handleChatResponse(response, source);
+  } catch (error) {
+    appendToSource(source, "error", error.message || String(error));
+  } finally {
+    const durationMs = performance.now() - startedAt;
+    const labelText = submittedValue.startsWith("/") ? submittedValue : "Chat";
+    recordTiming(labelText, durationMs, "chat");
+    setTerminalState("bereit");
   }
 }
 
 async function askChat(question) {
-  const response = await api("/chat", {
+  return api("/chat", {
     method: "POST",
     body: JSON.stringify({ question }),
   });
-  appendLine("system", response.answer);
 }
 
-async function refreshStatus(live) {
-  setTerminalState(live ? "live" : "status");
-  try {
-    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 10000 });
-    renderStatus(status);
-    if (status.live?.warnings?.length) {
-      appendLine("warning", `Status mit ${status.live.warnings.length} Warnung(en) aktualisiert.`);
-    }
-  } catch (error) {
-    appendLine("error", `Status konnte nicht geladen werden: ${error.message || error}`);
-  } finally {
-    setTerminalState("bereit");
+async function handleChatResponse(response, source = "ops") {
+  if (response.type === "clear") {
+    clearOutputs(source);
+    bootTerminal(source);
+    await refreshAll(false, { quiet: true, force: true });
+    return;
+  }
+  if (response.answer) {
+    appendToSource(source, response.type === "confirmation" ? "warning" : "system", response.answer);
+  }
+  if (response.type === "confirmation") {
+    state.pendingCommand = response.command || null;
+    return;
+  }
+  state.pendingCommand = null;
+  if (response.type === "status" && response.status) {
+    renderStatus(response.status);
+    await refreshJobs({ quiet: true });
+    return;
+  }
+  if (response.type === "comparison" && response.comparison) {
+    renderComparison(response.comparison);
+    await refreshAll(false, { quiet: true, force: true });
+    return;
+  }
+  if (response.type === "job" && response.job) {
+    announceJob(response.job, source);
+    pollJob(response.job.id);
+    await refreshAll(false, { quiet: true, force: true });
   }
 }
 
-async function refreshJobs() {
+async function refreshAll(live = false, options = {}) {
+  if (state.refreshing && !options.force) return;
+  state.refreshing = true;
+  try {
+    await Promise.allSettled([refreshStatus(live, options), refreshJobs(options)]);
+  } finally {
+    state.refreshing = false;
+  }
+}
+
+async function refreshStatus(live, options = {}) {
+  if (!options.quiet) setTerminalState(live ? "live" : "status");
+  try {
+    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 10000 });
+    renderStatus(status);
+    if (!options.quiet && status.live?.warnings?.length) {
+      appendTerminalLine("warning", `Status mit ${status.live.warnings.length} Warnung(en) aktualisiert.`);
+    }
+  } catch (error) {
+    if (!options.quiet) appendTerminalLine("error", `Status konnte nicht geladen werden: ${error.message || error}`);
+  } finally {
+    if (!options.quiet) setTerminalState("bereit");
+  }
+}
+
+async function refreshJobs(options = {}) {
   try {
     const payload = await api("/jobs", { timeout: 10000 });
     renderJobs(payload.jobs || []);
   } catch (error) {
-    appendLine("error", `Jobs konnten nicht geladen werden: ${error.message || error}`);
+    if (!options.quiet) appendTerminalLine("error", `Jobs konnten nicht geladen werden: ${error.message || error}`);
   }
 }
 
-function announceJob(job) {
-  appendLine("system", `Job ${job.id} gestartet: ${job.name}`);
+function announceJob(job, source = "ops") {
+  appendTerminalLine("system", `Job ${job.id} gestartet: ${job.name}`);
+  if (source === "chat") {
+    appendChatLine("system", `Ich habe "${job.name}" gestartet. Die technischen Logs bleiben in der Admin View.`);
+  }
   renderJobs([job]);
 }
 
@@ -148,24 +215,24 @@ function pollJob(jobId) {
     try {
       const job = await api(`/jobs/${jobId}`, { timeout: 10000 });
       renderJobLogs(job);
-      await refreshJobs();
+      await refreshJobs({ quiet: true });
       if (["succeeded", "failed"].includes(job.status)) {
         clearInterval(timer);
         state.polling.delete(jobId);
         if (job.status === "succeeded") {
           if (job.result?.warning) {
-            appendLine("warning", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)} mit Warnung: ${job.result.warning}`);
+            appendTerminalLine("warning", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)} mit Warnung: ${job.result.warning}`);
           } else {
-            appendLine("success", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)}.`);
+            appendTerminalLine("success", `Job ${job.id} abgeschlossen in ${formatSeconds(job.duration_seconds)}.`);
           }
         } else {
-          appendLine("error", `Job ${job.id} fehlgeschlagen nach ${formatSeconds(job.duration_seconds)}: ${job.error}`);
+          appendTerminalLine("error", `Job ${job.id} fehlgeschlagen nach ${formatSeconds(job.duration_seconds)}: ${job.error}`);
         }
         recordTiming(job.name, (job.duration_seconds || 0) * 1000, "job");
-        refreshStatus(false);
+        await refreshAll(false, { quiet: true });
       }
     } catch (error) {
-      appendLine("error", `Job ${jobId} konnte nicht gelesen werden: ${error.message || error}`);
+      appendTerminalLine("error", `Job ${jobId} konnte nicht gelesen werden: ${error.message || error}`);
       clearInterval(timer);
       state.polling.delete(jobId);
     }
@@ -176,14 +243,52 @@ function pollJob(jobId) {
 function renderJobLogs(job) {
   const previous = state.jobLogCounts.get(job.id) || 0;
   const nextLogs = (job.logs || []).slice(previous);
-  nextLogs.forEach((line) => appendLine(job.status === "failed" ? "error" : "system", `${job.id} ${line}`));
+  nextLogs.forEach((line) => appendTerminalLine(job.status === "failed" ? "error" : "system", `${job.id} ${line}`));
   state.jobLogCounts.set(job.id, (job.logs || []).length);
+}
+
+function resolvePendingConfirmation(value, source = "ops") {
+  if (!state.pendingCommand) return null;
+  const normalized = normalize(value);
+  if (isAffirmative(normalized)) {
+    const command = state.pendingCommand;
+    state.pendingCommand = null;
+    appendToSource(source, "system", `Bestaetigt. Ich starte ${command}.`);
+    return command;
+  }
+  if (isNegative(normalized)) {
+    state.pendingCommand = null;
+    appendToSource(source, "system", "Alles klar, ich starte die Aktion nicht.");
+    return false;
+  }
+  state.pendingCommand = null;
+  appendToSource(source, "system", "Offene Bestaetigung verworfen.");
+  return null;
+}
+
+function isAffirmative(value) {
+  return ["ja", "j", "yes", "ok", "okay", "start", "starte", "ausfuehren", "mach"].includes(value);
+}
+
+function isNegative(value) {
+  return ["nein", "n", "no", "stop", "abbrechen", "cancel"].includes(value);
+}
+
+function setView(view) {
+  const target = view === "chat" ? "chat" : "ops";
+  document.body.classList.toggle("view-chat", target === "chat");
+  document.querySelectorAll("[data-view]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === target);
+  });
+  const input = target === "chat" ? $("chat-input") : $("terminal-input");
+  if (input) input.focus({ preventScroll: true });
 }
 
 function renderStatus(payload) {
   const live = payload.live || {};
   const config = payload.config || {};
   const localCache = payload.local_cache || {};
+  const strunde = payload.strunde_cache || {};
   const dwd = payload.dwd_data || {};
   const comparison = payload.comparison || {};
   const models = payload.models || {};
@@ -193,6 +298,8 @@ function renderStatus(payload) {
   const cacheTone = !localCache.exists ? "bad" : localCache.stale ? "warn" : "good";
   const forecastCount = Number(dwd.forecast_rows || 0);
   const pairCount = Number(comparison.pairs || 0);
+  const dwdFrom = dwd.observation_min_time || dwd.min_time || dwd.min_valid_at;
+  const dwdTo = dwd.observation_max_time || dwd.max_time || dwd.max_valid_at;
 
   setChip("chip-influx", influxTone, "InfluxDB");
   setChip("chip-dwd", dwdTone, "DWD");
@@ -216,7 +323,11 @@ function renderStatus(payload) {
   setText("mosmix-station", config.mosmix_station_id || config.dwd_station_id || "-");
   setText("mosmix-product", config.mosmix_product || "-");
   setText("forecast-rows", number(dwd.forecast_rows));
-  setText("forecast-valid", forecastCount > 0 ? `gueltig bis ${formatDate(dwd.max_valid_at)}` : "keine Forecasts archiviert");
+  setText("forecast-valid", dwdTo ? `Daten bis ${formatDate(dwdTo)}` : "keine DWD-Daten");
+  setText("dwd-from", formatDate(dwdFrom));
+  setText("dwd-to", formatDate(dwdTo));
+  setText("forecast-from", formatDate(dwd.min_valid_at));
+  setText("forecast-to", formatDate(dwd.max_valid_at));
   setText("dwd-size", bytes(dwd.size_bytes));
 
   setText("cache-rows", number(localCache.rows));
@@ -225,6 +336,14 @@ function renderStatus(payload) {
   setText("cache-max", localCache.selected_max_time ? `bis ${formatDate(localCache.selected_max_time)}` : "keine Stationsdaten");
   setText("cache-modified", formatDate(localCache.last_modified));
   setPill("cache-stale", cacheTone, !localCache.exists ? "fehlt" : localCache.stale ? "veraltet" : "aktuell");
+
+  const strundeTone = !strunde.exists ? "bad" : strunde.stale ? "warn" : "good";
+  setPill("strunde-stale", strundeTone, !strunde.exists ? "fehlt" : strunde.stale ? "veraltet" : "aktuell");
+  setText("strunde-latest-level", centimeters(strunde.latest_level_cm));
+  setText("strunde-max-time", formatDate(strunde.max_time));
+  setText("strunde-min-time", formatDate(strunde.min_time));
+  setText("strunde-rows", number(strunde.rows));
+  setText("strunde-level-range", strunde.min_level_cm == null || strunde.max_level_cm == null ? "-" : `${centimeters(strunde.min_level_cm)} bis ${centimeters(strunde.max_level_cm)}`);
 
   renderComparison(comparison);
   renderModels(models);
@@ -363,15 +482,48 @@ function remember(value) {
 function recallHistory(direction) {
   if (!state.history.length) return;
   state.historyIndex = Math.max(0, Math.min(state.history.length, state.historyIndex + direction));
-  $("terminal-input").value = state.history[state.historyIndex] || "";
+  const value = state.history[state.historyIndex] || "";
+  $("terminal-input").value = value;
+  $("chat-input").value = value;
 }
 
 function appendLine(kind, text) {
+  appendTerminalLine(kind, text);
+  appendChatLine(kind, text);
+}
+
+function appendToSource(source, kind, text) {
+  if (source === "chat") {
+    appendChatLine(kind, text);
+    return;
+  }
+  appendTerminalLine(kind, text);
+}
+
+function appendTerminalLine(kind, text) {
   const output = $("terminal-output");
+  if (!output) return;
   const line = el("div", { className: `line ${kind}` });
   appendFormattedText(line, text);
   output.appendChild(line);
   output.scrollTop = output.scrollHeight;
+}
+
+function appendChatLine(kind, text) {
+  const output = $("chat-output");
+  if (!output) return;
+  const displayText = kind === "user" ? String(text).replace(/^>\s*/, "") : text;
+  const line = el("div", { className: `line ${kind}` });
+  appendFormattedText(line, displayText);
+  output.appendChild(line);
+  output.scrollTop = output.scrollHeight;
+}
+
+function clearOutputs(source = "all") {
+  const outputs = source === "chat" ? [$("chat-output")] : source === "ops" ? [$("terminal-output")] : [$("terminal-output"), $("chat-output")];
+  outputs.forEach((output) => {
+    if (output) output.replaceChildren();
+  });
 }
 
 function appendFormattedText(target, value) {
@@ -473,8 +625,25 @@ function bytes(value) {
   return `${(parsed / 1024 / 1024).toLocaleString("de-DE", { maximumFractionDigits: 1 })} MB`;
 }
 
+function centimeters(value) {
+  if (value === null || value === undefined || value === "") return "-";
+  const parsed = Number(value || 0);
+  if (Number.isNaN(parsed)) return "-";
+  return `${parsed.toLocaleString("de-DE", { maximumFractionDigits: 1 })} cm`;
+}
+
 function label(key) {
   return labels[key] || key;
+}
+
+function normalize(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replaceAll("\u00e4", "ae")
+    .replaceAll("\u00f6", "oe")
+    .replaceAll("\u00fc", "ue")
+    .replaceAll("\u00df", "ss");
 }
 
 function recordTiming(labelText, durationMs, kind) {

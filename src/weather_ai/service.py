@@ -13,6 +13,7 @@ from .local_cache import WeatherStationCsvCache
 from .ml import train_models
 from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation, MODEL_VARIABLES
 from .mosmix import MosmixClient
+from .stations import StationScope, scoped_model_dir
 
 
 class WeatherService:
@@ -44,40 +45,46 @@ class WeatherService:
             "at": result.at.isoformat(),
         }
 
-    def latest_comparison_summary(self) -> dict[str, object]:
-        comparisons = self._comparison_points()
+    def latest_comparison_summary(self, station_scope: StationScope | None = None) -> dict[str, object]:
+        comparisons = self._comparison_points(station_scope)
         return {
             "pairs": len(comparisons),
             "summary": summarize_comparisons(comparisons),
         }
 
-    def train(self) -> dict[str, object]:
-        comparisons = self._comparison_points()
-        result = train_models(comparisons, self.settings.model_dir)
+    def train(self, station_scope: StationScope | None = None) -> dict[str, object]:
+        model_dir = scoped_model_dir(self.settings, station_scope)
+        comparisons = self._comparison_points(station_scope)
+        result = train_models(comparisons, model_dir)
         profiles_written = 0
         if result.trained:
-            profiles_written = self._store_daily_profiles(self.forecast_archive.read())
+            profiles_written = self._store_daily_profiles(self.forecast_archive.read(), model_dir=model_dir)
         return {
             "trained": result.trained,
             "message": result.message,
             "metrics": result.metrics,
             "model_paths": result.model_paths,
             "profiles_written": profiles_written,
+            "scope": _scope_payload(station_scope),
         }
 
-    def _store_daily_profiles(self, forecasts: list[ForecastPoint]) -> int:
+    def _store_daily_profiles(self, forecasts: list[ForecastPoint], model_dir=None) -> int:
+        model_dir = model_dir or scoped_model_dir(self.settings)
         dwd_profiles = profiles_for_forecasts(forecasts, source="dwd")
         local_profiles = profiles_for_forecasts(
-            corrected_forecasts(forecasts, self.settings.model_dir),
+            corrected_forecasts(forecasts, model_dir),
             source="local-corrected",
         )
         return append_profiles(daily_profile_path(self.settings), [*dwd_profiles, *local_profiles])
 
-    def _comparison_points(self) -> list:
+    def _comparison_points(self, station_scope: StationScope | None = None) -> list:
         forecasts = self.forecast_archive.read()
         if not forecasts:
             return []
-        observations = self._local_training_rows(since_days=self._observation_days_for_forecasts(forecasts))
+        observations = self._local_training_rows(
+            since_days=self._observation_days_for_forecasts(forecasts),
+            station_scope=station_scope,
+        )
         return match_forecasts_to_observations(forecasts, observations)
 
     def _observation_days_for_forecasts(self, forecasts: list[ForecastPoint]) -> int:
@@ -87,10 +94,20 @@ class WeatherService:
         age_days = ceil((datetime.now(timezone.utc) - oldest).total_seconds() / 86400) + 1
         return max(30, min(self.settings.local_cache_retention_days, age_days))
 
-    def _local_training_rows(self, since_days: int) -> list[LocalObservation]:
+    def _local_training_rows(self, since_days: int, station_scope: StationScope | None = None) -> list[LocalObservation]:
         model_fields = {LOCAL_FIELD_MAP[variable] for variable in MODEL_VARIABLES}
         return self.local_cache.observations_since(
             days=since_days,
             fields=model_fields,
-            measurements={self.settings.local_measurement},
+            measurements=station_scope.measurements if station_scope else None,
         )
+
+
+def _scope_payload(station_scope: StationScope | None) -> dict[str, object]:
+    if station_scope is None:
+        return {"kind": "all", "label": "alle Stationen", "measurements": None}
+    return {
+        "kind": station_scope.kind,
+        "label": station_scope.label,
+        "measurements": sorted(station_scope.measurements) if station_scope.measurements else None,
+    }

@@ -3,20 +3,30 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Weather Ops Leitstand</title>
-    <link rel="stylesheet" href="/static/styles.css?v=__ASSET_VERSION__" />
+    <title>Weather Ops Admin View</title>
+    <link rel="stylesheet" href="/gui/static/styles.css?v=__ASSET_VERSION__&gui_token=__GUI_TOKEN__" />
   </head>
   <body>
     <main class="app-shell">
       <header class="topbar">
-        <div class="brand-block">
-          <p class="product-kicker">Lokale Wetter-KI</p>
-          <h1>Weather Ops Leitstand</h1>
-          <p class="topbar-copy">
-            Sichere Datenlage, Forecast-Vergleich und Modelltraining fuer den lokalen Standort.
-          </p>
+        <div class="brand-row">
+          <div class="fhdw-mark" aria-label="FHDW Fachhochschule der Wirtschaft">
+            <span class="fhdw-word">FHDW</span>
+            <span class="fhdw-sub">Fachhochschule der Wirtschaft</span>
+          </div>
+          <div class="brand-block">
+            <p class="product-kicker">Lokale Wetter-KI</p>
+            <h1>Weather Ops Admin View</h1>
+            <p class="topbar-copy">
+              Sichere Datenlage, Forecast-Vergleich und Modelltraining fuer den lokalen Standort.
+            </p>
+          </div>
         </div>
         <div class="topbar-actions" aria-label="Live Quellenstatus">
+          <div class="view-switch" aria-label="Ansicht wechseln">
+            <button class="view-tab active" data-view="ops" type="button">Admin View</button>
+            <button class="view-tab" data-view="chat" type="button">Chat</button>
+          </div>
           <span class="chip" id="chip-influx"><span class="dot unknown"></span>InfluxDB</span>
           <span class="chip" id="chip-dwd"><span class="dot unknown"></span>DWD</span>
           <button class="button button-primary" id="refresh-status" type="button">Live pruefen</button>
@@ -68,6 +78,10 @@
             <button class="command-button" data-command="/sync-dwd" type="button">
               <span class="command-code">/sync-dwd</span>
               <span>DWD Historie</span>
+            </button>
+            <button class="command-button" data-command="/sync-strunde" type="button">
+              <span class="command-code">/sync-strunde</span>
+              <span>Strunde Pegel</span>
             </button>
             <button class="command-button" data-command="/archive" type="button">
               <span class="command-code">/archive</span>
@@ -146,12 +160,19 @@
           <section class="status-card">
             <div class="card-title compact-title">
               <h3>DWD</h3>
-              <span class="dot unknown" id="dwd-dot"></span>
+              <div class="card-actions">
+                <span class="dot unknown" id="dwd-dot"></span>
+                <button class="icon-button" data-open-file="dwd-data" type="button" title="DWD-CSV oeffnen" aria-label="DWD-CSV oeffnen">&#8599;</button>
+              </div>
             </div>
             <dl class="data-list">
               <div><dt>MOSMIX</dt><dd id="mosmix-station">-</dd></div>
               <div><dt>Produkt</dt><dd id="mosmix-product">-</dd></div>
               <div><dt>Forecasts</dt><dd id="forecast-rows">-</dd></div>
+              <div><dt>Daten von</dt><dd id="dwd-from">-</dd></div>
+              <div><dt>Daten bis</dt><dd id="dwd-to">-</dd></div>
+              <div><dt>Forecast von</dt><dd id="forecast-from">-</dd></div>
+              <div><dt>Forecast bis</dt><dd id="forecast-to">-</dd></div>
               <div><dt>Dateigroesse</dt><dd id="dwd-size">-</dd></div>
             </dl>
           </section>
@@ -159,13 +180,33 @@
           <section class="status-card">
             <div class="card-title compact-title">
               <h3>Lokale CSV</h3>
-              <span id="cache-stale" class="pill muted">laedt</span>
+              <div class="card-actions">
+                <span id="cache-stale" class="pill muted">laedt</span>
+                <button class="icon-button" data-open-file="local-cache" type="button" title="Lokale CSV oeffnen" aria-label="Lokale CSV oeffnen">&#8599;</button>
+              </div>
             </div>
             <dl class="data-list">
               <div><dt>Gesamtzeilen</dt><dd id="cache-rows">-</dd></div>
               <div><dt>Stationszeilen</dt><dd id="cache-selected-rows">-</dd></div>
               <div><dt>Von</dt><dd id="cache-min">-</dd></div>
               <div><dt>Geaendert</dt><dd id="cache-modified">-</dd></div>
+            </dl>
+          </section>
+
+          <section class="status-card">
+            <div class="card-title compact-title">
+              <h3>Strunde</h3>
+              <div class="card-actions">
+                <span id="strunde-stale" class="pill muted">laedt</span>
+                <button class="icon-button" data-open-file="strunde-cache" type="button" title="Strunde-CSV oeffnen" aria-label="Strunde-CSV oeffnen">&#8599;</button>
+              </div>
+            </div>
+            <dl class="data-list">
+              <div><dt>Aktueller Pegel</dt><dd id="strunde-latest-level">-</dd></div>
+              <div><dt>Letzter Wert</dt><dd id="strunde-max-time">-</dd></div>
+              <div><dt>Daten von</dt><dd id="strunde-min-time">-</dd></div>
+              <div><dt>Zeilen</dt><dd id="strunde-rows">-</dd></div>
+              <div><dt>Spanne</dt><dd id="strunde-level-range">-</dd></div>
             </dl>
           </section>
 
@@ -214,7 +255,23 @@
           </section>
         </aside>
       </section>
+
+      <section class="chat-view" aria-label="KI Chat">
+        <section class="chat-panel">
+          <div class="chat-output" id="chat-output" aria-live="polite"></div>
+          <form class="chat-input" id="chat-form">
+            <input
+              id="chat-input"
+              name="chat"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Frage stellen, /info nutzen oder eine Aktion beschreiben"
+            />
+            <button class="button button-primary" type="submit">Senden</button>
+          </form>
+        </section>
+      </section>
     </main>
-    <script src="/static/app.js?v=__ASSET_VERSION__" defer></script>
+    <script src="/gui/static/app.js?v=__ASSET_VERSION__&gui_token=__GUI_TOKEN__" defer></script>
   </body>
 </html>

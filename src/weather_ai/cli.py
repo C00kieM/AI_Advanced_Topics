@@ -10,6 +10,7 @@ from .diagnostics import build_status, format_status
 from .dwd_historical import DwdHistoricalCsvStore, DwdHistoricalSyncResult
 from .local_cache import CacheSyncResult, WeatherStationCsvCache, sync_cache_on_startup
 from .service import WeatherService
+from .strunde_cache import StrundeCacheSyncResult, StrundeLevelCsvCache
 
 
 try:
@@ -64,6 +65,12 @@ def _cmd_sync_dwd_history() -> None:
     print(json.dumps(_dwd_history_result_payload(result), indent=2, ensure_ascii=False))
 
 
+def _cmd_sync_strunde() -> None:
+    settings = Settings.from_env()
+    result = StrundeLevelCsvCache(settings).sync()
+    print(json.dumps(_strunde_result_payload(result), indent=2, ensure_ascii=False))
+
+
 def _settings_with_startup_sync() -> Settings:
     settings = Settings.from_env()
     try:
@@ -97,6 +104,23 @@ def _dwd_history_result_payload(result: DwdHistoricalSyncResult) -> dict[str, st
         "fetched_records": result.fetched_records,
         "written_rows": result.written_rows,
         "cutoff": result.cutoff.isoformat(),
+        "skipped": result.skipped,
+    }
+    if result.reason:
+        payload["reason"] = result.reason
+    if result.warning:
+        payload["warning"] = result.warning
+    return payload
+
+
+def _strunde_result_payload(result: StrundeCacheSyncResult) -> dict[str, str | int | bool | None]:
+    payload: dict[str, str | int | bool | None] = {
+        "path": str(result.path),
+        "existing_rows": result.existing_rows,
+        "fetched_rows": result.fetched_rows,
+        "written_rows": result.written_rows,
+        "cutoff": result.cutoff.isoformat(),
+        "started_at": result.started_at.isoformat(),
         "skipped": result.skipped,
     }
     if result.reason:
@@ -144,11 +168,16 @@ if typer is not None:
         """Laedt historische DWD-CDC-Daten und schreibt sie in eine lokale CSV."""
         _cmd_sync_dwd_history()
 
+    @app.command("sync-strunde")
+    def sync_strunde() -> None:
+        """Synchronisiert Strunde-Pegeldaten aus InfluxDB in eine lokale CSV."""
+        _cmd_sync_strunde()
+
 
 def _argparse_main() -> None:
     parser = argparse.ArgumentParser(description="Wetter-KI MVP CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "archive-dwd-forecast", "compare", "train", "chat", "sync-local-db", "sync-dwd-history"):
+    for command in ("status", "archive-dwd-forecast", "compare", "train", "chat", "sync-local-db", "sync-dwd-history", "sync-strunde"):
         subparsers.add_parser(command)
     args = parser.parse_args()
     commands = {
@@ -159,6 +188,7 @@ def _argparse_main() -> None:
         "chat": _cmd_chat,
         "sync-local-db": _cmd_sync_local_db,
         "sync-dwd-history": _cmd_sync_dwd_history,
+        "sync-strunde": _cmd_sync_strunde,
     }
     commands[args.command]()
 

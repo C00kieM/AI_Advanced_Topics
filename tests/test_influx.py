@@ -1,7 +1,8 @@
 import pytest
+from datetime import datetime, timezone
 
 from weather_ai.config import Settings
-from weather_ai.influx import InfluxClient, InfluxWriteBlockedError, latest_observations_flux
+from weather_ai.influx import InfluxClient, InfluxWriteBlockedError, latest_observations_flux, strunde_level_rows_since_flux
 
 
 def test_latest_observations_flux_targets_measurement():
@@ -9,6 +10,20 @@ def test_latest_observations_flux_targets_measurement():
     assert 'from(bucket: "iot")' in flux
     assert 'r["_measurement"] == "wetterdaten-gl-fw-1"' in flux
     assert "|> last()" in flux
+
+
+def test_strunde_level_flux_targets_configured_measurement_and_field():
+    flux = strunde_level_rows_since_flux(
+        'iot"prod',
+        'pegel-strunde"',
+        "water\\level",
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+    )
+
+    assert 'from(bucket: "iot\\"prod")' in flux
+    assert 'r["_measurement"] == "pegel-strunde\\""' in flux
+    assert 'r["_field"] == "water\\\\level"' in flux
+    assert 'range(start: time(v: "2026-07-01T00:00:00Z"))' in flux
 
 
 def test_influx_write_forecasts_is_blacklisted():

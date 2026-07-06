@@ -34,18 +34,8 @@ def test_read_forecast_rows_stops_after_forecast_block():
     assert rows[0]["field"] == "temperature"
 
 
-def test_read_forecast_rows_stops_when_file_starts_with_observations(tmp_path):
-    path = tmp_path / "dwd_weather_data.csv"
-    path.write_text(
-        "\n".join(
-            [
-                "kind,time,station_id,dataset,field,value,quality,source_url,source,issued_at,valid_at,horizon_hours,unit,raw_name",
-                "observation,2026-05-20T09:00:00+00:00,02667,air_temperature,TT_10,10,1,http://example,dwd-cdc,,,,,",
-                "forecast,2026-05-20T10:00:00+00:00,10513,forecast,temperature,12.3,,,dwd-opendata-mosmix,2026-05-20T08:00:00+00:00,2026-05-20T10:00:00+00:00,2,degC,TTT",
-            ]
-        ),
-        encoding="utf-8",
-    )
+def test_read_forecast_rows_stops_when_file_starts_with_observations():
+    path = Path("tests/fixtures/dwd_weather_observation_then_forecast.csv")
 
     assert read_forecast_rows(path) == []
 

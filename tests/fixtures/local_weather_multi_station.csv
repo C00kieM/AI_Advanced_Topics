@@ -1,0 +1,13 @@
+time,measurement,field,value
+2026-06-27T08:00:00+00:00,wetterdaten-gl-fw-1,Lufttemperatur,20.0
+2026-06-27T08:00:00+00:00,wetterdaten-gl-fw-1,wind_speed,2.0
+2026-06-27T08:00:00+00:00,wetterdaten-gl-fw-1,Niederschlag,0.0
+2026-06-27T08:00:00+00:00,wetterdaten-gl-mitte,Lufttemperatur,30.0
+2026-06-27T08:00:00+00:00,wetterdaten-gl-mitte,wind_speed,3.0
+2026-06-27T08:00:00+00:00,wetterdaten-gl-mitte,Niederschlag,1.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-fw-1,Lufttemperatur,18.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-fw-1,wind_speed,2.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-fw-1,Niederschlag,0.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-mitte,Lufttemperatur,28.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-mitte,wind_speed,4.0
+2026-06-30T08:00:00+00:00,wetterdaten-gl-mitte,Niederschlag,2.0

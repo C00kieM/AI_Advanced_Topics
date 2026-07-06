@@ -209,18 +209,13 @@ tempCodeRunnerFile.py
 .ruff_cache/
 
 # Wetter-KI local artifacts
+data/
 .weather-ai-models/
 .tmp-test-models/
+.test-runtime/
+pytest-tmp-run/
 .tmp-test-forecast-archive*.csv
 .tmp-test-forecast-archive*.csv.tmp
-data/local_weather_history.csv
-data/local_weather_history.csv.tmp
-data/dwd_weather_data.csv
-data/*.sync.json
-data/daily_weather_profiles.csv
-data/dwd_forecast_archive.csv
-data/dwd_forecast_archive.csv.tmp
-data/dwd_historical_weather.csv
 output/playwright/
 
 # PyPI configuration file

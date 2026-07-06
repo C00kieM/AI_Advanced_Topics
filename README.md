@@ -5,10 +5,12 @@ Lokaler Wetter-KI-MVP mit:
 - InfluxDB-Anbindung fuer lokale Wetterstationsdaten
 - DWD MOSMIX OpenData Adapter fuer KMZ/KML-Stationsprognosen
 - JSON-Fallback fuer `https://dwd.api.bund.dev/`
-- FastAPI Backend
+- internes FastAPI Backend fuer CLI, Desktop-GUI und Automatisierung
 - interaktivem CLI-Chat
+- lokaler Python-Desktop-GUI per `weather-gui`
 - regelbasiertem lokalen Chat ohne LLM-Abhaengigkeit
 - erster ML-Schicht fuer DWD-vs-lokal-Korrekturen
+- Strunde-Pegelcache mit Regen/Pegel-Korrelation und vorsichtiger Pegelprognose
 
 ## Schnellstart
 
@@ -25,23 +27,25 @@ Danach `.env` lokal ausfuellen. Der InfluxDB-Token gehoert nur in `.env` und nie
 weather-chat status
 weather-chat sync-local-db
 weather-chat sync-dwd-history
+weather-chat sync-strunde
 weather-chat archive-dwd-forecast
 weather-chat chat
 weather-gui
-uvicorn weather_ai.api:app --reload
 ```
 
 Der Chat funktioniert ohne LLM-Provider. Er nutzt lokale Messdaten, DWD-Prognosen und den ML-/Datenstatus, um eine nachvollziehbare Antwort zu erzeugen.
 
 ## Desktop-GUI
 
-Der lokale Desktop-Launcher startet das FastAPI-Backend ohne blockierenden Startup-Sync und oeffnet die Weather-Ops-Oberflaeche in einem nativen Fenster:
+Der lokale Desktop-Launcher ist der einzige grafische Einstieg. Er startet das FastAPI-Backend intern ohne blockierenden Startup-Sync und oeffnet die Weather-Ops-Oberflaeche in einem nativen Python/pywebview-Fenster:
 
 ```powershell
 weather-gui
 ```
 
-Die GUI enthaelt ein sicheres App-Terminal mit Freitext-Chat und bekannten Slash-Kommandos: `/status`, `/sync-local`, `/sync-dwd`, `/archive`, `/compare`, `/train` und `/clear`. Es wird keine echte Betriebssystem-Shell freigegeben. Lange Aktionen laufen als Hintergrundjobs und koennen im Job-Monitor verfolgt werden.
+Es gibt keine separate Browser-Website mehr. `weather_ai.api:create_app()` serviert standardmaessig nur die API. Die GUI-Assets werden erst durch `weather-gui` mit einem internen Start-Token freigeschaltet und sind fuer die Desktop-Sitzung gedacht.
+
+Die GUI enthaelt eine Chat-zentrierte Admin View mit Freitext-Chat und bekannten Slash-Kommandos: `/info`, `/status`, `/sync-local`, `/sync-dwd`, `/sync-strunde`, `/archive`, `/compare`, `/train` und `/clear`. Es wird keine echte Betriebssystem-Shell freigegeben. Lange Aktionen laufen als Hintergrundjobs und koennen im Job-Monitor verfolgt werden. Die separate Chat-Ansicht ist bewusst hell und einfach gehalten: nur Chatverlauf, Eingabe und Senden-Button.
 
 ## Lokale CSV-DB
 
@@ -80,6 +84,26 @@ weather-chat sync-dwd-history
 
 Die feste DWD-Datei ist `data/dwd_weather_data.csv`. Sie enthaelt historische CDC-Messwerte und lokal archivierte MOSMIX-Prognosen in einer gemeinsamen Struktur.
 
+## Strunde-Pegel
+
+Strunde-Pegelwerte werden getrennt von den Wetterstationsdaten in einer eigenen lokalen CSV gehalten:
+
+```powershell
+STRUNDE_MEASUREMENT=pegel-strunde
+STRUNDE_LEVEL_FIELD=water_level_cm
+STRUNDE_CACHE_PATH=data/strunde_water_level.csv
+STRUNDE_CACHE_RETENTION_DAYS=1095
+STRUNDE_RAIN_MEASUREMENTS=
+```
+
+Manueller Sync:
+
+```powershell
+weather-chat sync-strunde
+```
+
+Der Chat beantwortet Fragen wie „Wie hoch ist die Strunde aktuell?“, „Wie war der Pegel am 30.06.2026?“ oder „Was passiert morgen mit der Strunde?“. Die Prognose kombiniert den letzten Pegel, gespeicherte DWD-Niederschlagsprognosen und eine einfache Korrelation zwischen Niederschlag und spaeterem Pegelanstieg. Wenn InfluxDB offline ist, bleibt ein vorhandener Strunde-CSV-Cache nutzbar; ohne Pegelcache sagt der Chat klar, dass keine belastbare Pegelantwort moeglich ist.
+
 ## InfluxDB ist Read-only
 
 Diese App schreibt niemals in InfluxDB. InfluxDB wird nur gelesen. DWD-Prognosen werden lokal in `data/dwd_weather_data.csv` archiviert:
@@ -88,7 +112,7 @@ Diese App schreibt niemals in InfluxDB. InfluxDB wird nur gelesen. DWD-Prognosen
 weather-chat archive-dwd-forecast
 ```
 
-Der alte Influx-Write-Pfad ist im Code hart blockiert. Auch versehentliche Aufrufe von `InfluxClient.write_forecasts(...)` werfen sofort einen Fehler. Produktiv gibt es nur zwei feste Daten-Dateien: `data/local_weather_history.csv` und `data/dwd_weather_data.csv`.
+Der alte Influx-Write-Pfad ist im Code hart blockiert. Auch versehentliche Aufrufe von `InfluxClient.write_forecasts(...)` werfen sofort einen Fehler. Produktiv genutzte lokale Daten-Dateien sind `data/local_weather_history.csv`, `data/dwd_weather_data.csv` und `data/strunde_water_level.csv`.
 
 ## DWD MOSMIX
 

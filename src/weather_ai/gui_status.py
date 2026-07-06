@@ -11,9 +11,11 @@ import csv
 from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
 from .diagnostics import build_status
-from .forecast_archive import ForecastCsvArchive, read_forecast_rows, row_to_forecast
+from .forecast_archive import ForecastCsvArchive, row_to_forecast
 from .local_cache import WeatherStationCsvCache, read_cache_rows
 from .models import ForecastPoint, LOCAL_FIELD_MAP, MODEL_VARIABLES, StatusReport
+from .stations import scoped_model_dir
+from .strunde_cache import read_strunde_rows
 
 
 TRAINING_MIN_POINTS = 24
@@ -23,9 +25,10 @@ _DWD_CACHE: dict[tuple[str, int, float], tuple[dict[str, Any], list[ForecastPoin
 def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) -> dict[str, Any]:
     report = _safe_status_report(settings) if live else StatusReport()
     local_cache = summarize_local_cache(settings.local_cache_path, selected_measurement=settings.local_measurement)
+    strunde_cache = summarize_strunde_cache(settings.strunde_cache_path)
     dwd_data, forecasts = summarize_dwd_data(settings.dwd_data_path, deep=deep)
     comparison = summarize_cached_comparison(settings, forecasts)
-    models = summarize_models(settings.model_dir, comparison["counts"])
+    models = summarize_models(scoped_model_dir(settings), comparison["counts"])
     newest_local = _newest_local_time(report)
 
     return {
@@ -41,6 +44,9 @@ def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) 
             "mosmix_product": settings.mosmix_product,
             "dwd_data_path": str(settings.dwd_data_path),
             "local_cache_path": str(settings.local_cache_path),
+            "strunde_cache_path": str(settings.strunde_cache_path),
+            "strunde_measurement": settings.strunde_measurement,
+            "strunde_level_field": settings.strunde_level_field,
         },
         "live": {
             "checked": live,
@@ -56,6 +62,7 @@ def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) 
             },
         },
         "local_cache": local_cache,
+        "strunde_cache": strunde_cache,
         "dwd_data": dwd_data,
         "comparison": comparison,
         "models": models,
@@ -100,6 +107,8 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
         "forecast_rows": 0,
         "min_time": None,
         "max_time": None,
+        "observation_min_time": None,
+        "observation_max_time": None,
         "min_valid_at": None,
         "max_valid_at": None,
         "datasets": {},
@@ -108,29 +117,21 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
     }
     if not path.exists():
         return summary, []
-    if not deep:
-        forecasts = [row_to_forecast(row) for row in read_forecast_rows(path)]
-        valid_times = [item.valid_at.isoformat() for item in forecasts]
-        summary.update(
-            {
-                "rows": None,
-                "observation_rows": None,
-                "forecast_rows": len(forecasts),
-                "min_valid_at": min(valid_times) if valid_times else None,
-                "max_valid_at": max(valid_times) if valid_times else None,
-            }
-        )
-        return summary, forecasts
 
     cache_key = (str(path.resolve()), path.stat().st_size, path.stat().st_mtime)
     cached = _DWD_CACHE.get(cache_key)
     if cached:
-        return cached
+        cached_summary, cached_forecasts = cached
+        payload = dict(cached_summary)
+        payload["deep"] = deep
+        return payload, cached_forecasts
 
     datasets: Counter[str] = Counter()
     fields: Counter[str] = Counter()
     min_time: str | None = None
     max_time: str | None = None
+    observation_min_time: str | None = None
+    observation_max_time: str | None = None
     min_valid_at: str | None = None
     max_valid_at: str | None = None
     forecasts: list[ForecastPoint] = []
@@ -152,6 +153,9 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
             row_time = row.get("time", "")
             min_time = _min_text(min_time, row_time)
             max_time = _max_text(max_time, row_time)
+            if kind == "observation":
+                observation_min_time = _min_text(observation_min_time, row_time)
+                observation_max_time = _max_text(observation_max_time, row_time)
             valid_at = row.get("valid_at", "")
             min_valid_at = _min_text(min_valid_at, valid_at)
             max_valid_at = _max_text(max_valid_at, valid_at)
@@ -165,6 +169,8 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
         {
             "min_time": min_time,
             "max_time": max_time,
+            "observation_min_time": observation_min_time,
+            "observation_max_time": observation_max_time,
             "min_valid_at": min_valid_at,
             "max_valid_at": max_valid_at,
             "datasets": dict(datasets.most_common(12)),
@@ -173,7 +179,34 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
     )
     _DWD_CACHE.clear()
     _DWD_CACHE[cache_key] = (summary, forecasts)
-    return summary, forecasts
+    payload = dict(summary)
+    payload["deep"] = deep
+    return payload, forecasts
+
+
+def summarize_strunde_cache(path: Path) -> dict[str, Any]:
+    rows = read_strunde_rows(path)
+    times = [_parse_time(row.get("time", "")) for row in rows]
+    valid_times = [item for item in times if item is not None]
+    latest_time = max(valid_times) if valid_times else None
+    values = [_float_or_none(row.get("value", "")) for row in rows]
+    valid_values = [item for item in values if item is not None]
+    latest_value = None
+    if latest_time is not None:
+        latest_rows = [row for row in rows if _parse_time(row.get("time", "")) == latest_time]
+        latest_value = _float_or_none(latest_rows[-1].get("value", "")) if latest_rows else None
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "rows": len(rows),
+        "min_time": min(valid_times).isoformat() if valid_times else None,
+        "max_time": latest_time.isoformat() if latest_time else None,
+        "last_modified": _mtime(path),
+        "latest_level_cm": latest_value,
+        "min_level_cm": min(valid_values) if valid_values else None,
+        "max_level_cm": max(valid_values) if valid_values else None,
+        "stale": _is_stale(latest_time),
+    }
 
 
 def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoint] | None = None) -> dict[str, Any]:
@@ -192,7 +225,7 @@ def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoin
         observations = WeatherStationCsvCache(settings).observations_since(
             days=_observation_days_for_forecasts(settings, forecasts),
             fields=model_fields,
-            measurements={settings.local_measurement},
+            measurements=None,
         )
         comparisons = match_forecasts_to_observations(forecasts, observations)
     except Exception as exc:  # noqa: BLE001 - GUI status should still render.
@@ -299,6 +332,13 @@ def _parse_time(value: str) -> datetime | None:
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
     except ValueError:
+        return None
+
+
+def _float_or_none(value: str) -> float | None:
+    try:
+        return float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
         return None
 
 

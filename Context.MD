@@ -4,7 +4,7 @@
 
 - Repository: `AI_Advanced_Topics`
 - Sprache/Stack: Python 3.11+, FastAPI, Typer CLI, pywebview, scikit-learn
-- Zielbetrieb: lokaler Server im Netzwerk der Wetterstation und InfluxDB
+- Zielbetrieb: lokale Python-Desktop-App im Netzwerk der Wetterstation und InfluxDB
 - Secrets: ausschliesslich lokal ueber `.env`; keine Tokens in Code, Doku oder Git
 - InfluxDB ist fuer diese App strikt read-only. Es duerfen niemals Daten in InfluxDB geschrieben werden.
 
@@ -40,6 +40,7 @@ Aktueller lokaler Datenstand vom 25.06.2026:
 
 - `data/local_weather_history.csv`: ca. 349.947 Zeilen, Zeitraum 24.03.2024 bis 23.06.2026.
 - `data/dwd_weather_data.csv`: ca. 1.574.901 Zeilen, davon 2.798 Forecast-Zeilen und ca. 1.572.103 historische DWD-Beobachtungen.
+- `data/strunde_water_level.csv`: lokaler Strunde-Pegelcache, falls `STRUNDE_MEASUREMENT` aus InfluxDB synchronisiert werden kann.
 - Forecast-Archiv in der DWD-Datei reicht aktuell bis 30.05.2026.
 - `weather-chat compare` findet aktuell 738 Forecast-vs-Ist-Paare.
 - `weather-chat train` trainiert aktuell Modelle fuer Niederschlag, Temperatur und Windgeschwindigkeit.
@@ -99,12 +100,26 @@ Referenzen:
 
 DWD/MOSMIX-Prognosen werden nicht in InfluxDB gespeichert. Sie werden lokal in `data/dwd_weather_data.csv` mit `kind=forecast` archiviert. Dadurch bleibt InfluxDB ausschliesslich Quelle fuer lokale Wetterstationsdaten.
 
-Produktiv existieren genau zwei feste lokale Daten-Dateien:
+Produktiv existieren drei feste lokale Daten-Dateien:
 
 - `data/local_weather_history.csv`
 - `data/dwd_weather_data.csv`
+- `data/strunde_water_level.csv`
 
 Alte Zwischenartefakte wie `data/dwd_forecast_archive.csv`, `data/dwd_historical_weather.csv`, `*.tmp`, `.tmp-test-forecast-archive*.csv`, pytest-Cache-Verzeichnisse und Browser-Screenshot-Profile sind keine Projektartefakte und bleiben ignoriert beziehungsweise werden entfernt.
+
+## Strunde-Pegel
+
+Die Strunde-Erweiterung liest Pegelwerte read-only aus InfluxDB und schreibt sie in `data/strunde_water_level.csv`. Relevante Konfiguration:
+
+- `STRUNDE_MEASUREMENT=pegel-strunde`
+- `STRUNDE_LEVEL_FIELD=water_level_cm`
+- `STRUNDE_CACHE_RETENTION_DAYS=1095`
+- optional `STRUNDE_RAIN_MEASUREMENTS` als kommaseparierte Liste der Regenmessungen, die fuer die Regen/Pegel-Korrelation genutzt werden sollen
+
+Wenn InfluxDB offline ist, bleibt ein vorhandener Strunde-Cache nutzbar. Ohne Pegelcache beantwortet der Chat Strunde-Fragen bewusst mit „nicht verfuegbar“, statt Werte zu erfinden. Prognosen sind vorsichtig: ohne gespeicherte DWD-Niederschlagsprognose wird keine Pegelhoehe extrapoliert.
+
+Externe Recherche: PEGELONLINE bietet eine offizielle REST-API fuer gewässerkundliche Pegeldaten, aber laut Dokumentation nur 30 Tage rueckwirkend und stationenbasiert per UUID. Eine belastbare oeffentliche Strunde-spezifische API wurde nicht als Projektquelle uebernommen; die Strunde-Datenquelle bleibt deshalb die lokale InfluxDB.
 
 ## Vergleich und Training
 
@@ -122,20 +137,26 @@ Training:
 
 ## Desktop-GUI
 
-`weather-gui` startet lokal einen FastAPI-Server und oeffnet eine pywebview-Desktop-Oberflaeche. Die GUI ist deutschsprachig und als Weather-Ops-Terminal aufgebaut:
+`weather-gui` startet lokal einen internen FastAPI-Server und oeffnet eine pywebview-Desktop-Oberflaeche. Das ist der einzige grafische Einstieg; es gibt keine separate Browser-Website als Nutzeroberflaeche. `create_app()` serviert standardmaessig nur die API. Die GUI-Assets werden erst im Desktop-Modus mit `gui_enabled=True` und internem Start-Token ausgeliefert.
 
-- linke Seite: sicheres Terminal fuer Chat, Slash-Kommandos und Job-Logs
-- rechte Seite: feste Statuskarten fuer Systemlage, InfluxDB, DWD, lokale CSV, Vergleich, Modelle, Warnungen und Jobs
-- erlaubte Kommandos: `/status`, `/sync-local`, `/sync-dwd`, `/archive`, `/compare`, `/train`, `/clear`
+Die GUI ist deutschsprachig und als chat-zentrierte Weather-Ops-Admin-View aufgebaut:
+
+- Admin-View: sicheres Terminal fuer Chat, Slash-Kommandos und Job-Logs plus feste Statuskarten fuer Systemlage, InfluxDB, DWD, lokale CSV, Vergleich, Modelle, Warnungen, Laufzeiten und Jobs
+- Chat-Ansicht: helle einfache Chatbot-Oberflaeche ohne technische Statusbar
+- erlaubte Kommandos: `/info`, `/status`, `/sync-local`, `/sync-dwd`, `/sync-strunde`, `/archive`, `/compare`, `/train`, `/clear`
+- Slash-Kommandos und Freitext laufen primaer ueber `POST /chat`; natuerliche Aktionswuensche erzeugen zuerst eine Bestaetigungsfrage
 - keine echte Betriebssystem-Shell in der GUI
 - lange Aktionen laufen ueber den in-memory `JobManager` als Hintergrundjobs
+- Status, Jobs, DWD-Zeitraeume, Vergleich und Modelle werden zentral und periodisch aktualisiert
 
 Relevante GUI/API-Endpunkte:
 
 - `GET /status`
-- `POST /terminal/command`
+- `POST /chat`
+- `POST /terminal/command` als versteckter Kompatibilitaets-Shim
 - `POST /jobs/sync-local-db`
 - `POST /jobs/sync-dwd-history`
+- `POST /jobs/sync-strunde`
 - `POST /jobs/archive-dwd-forecast`
 - `POST /jobs/train`
 - `GET /jobs`
@@ -144,6 +165,16 @@ Relevante GUI/API-Endpunkte:
 ## Chatbot
 
 Der MVP verwendet keinen LLM-Provider. Der Chat ist regelbasiert und kombiniert lokale Messwerte, DWD-Prognosekontext, Datenalter, Forecast-vs-Ist-Vergleiche und Modellstatus zu einer transparenten deutschen Antwort.
+
+Antwortstil:
+
+- zuerst die Nutzerfrage beantworten, danach nur die wichtigsten Daten nennen
+- Temperaturwerte fett als `**x °C**` beziehungsweise `**x bis y °C**` ausgeben
+- Wetterantworten enthalten Temperatur, Wind und Niederschlag
+- Monats- und Langfristfragen nicht als exakte Prognose ausgeben; stattdessen typische gespeicherte Werte und aktuelle Kurzfristprognosen trennen
+- historische Fragen nur innerhalb des gespeicherten Datenbereichs beantworten
+- Zukunftsfragen maximal sechs Monate nach vorne beantworten
+- Laufzeiten und technische Modell-/Jobdetails nicht in normale Chatantworten schreiben, sondern nur in Diagnose-/Statuskontexten
 
 ## Offene Punkte
 

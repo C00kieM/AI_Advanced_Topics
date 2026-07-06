@@ -122,6 +122,15 @@ class InfluxClient:
         flux = weather_station_rows_since_flux(self.settings.influx_bucket, start)
         return self.query_csv(flux, timeout=120)
 
+    def strunde_level_rows_since(self, start: datetime) -> list[dict[str, str]]:
+        flux = strunde_level_rows_since_flux(
+            self.settings.influx_bucket,
+            self.settings.strunde_measurement,
+            self.settings.strunde_level_field,
+            start,
+        )
+        return self.query_csv(flux, timeout=120)
+
 
 def latest_observations_flux(bucket: str, measurement: str, days: int) -> str:
     return f'''
@@ -165,3 +174,21 @@ from(bucket: "{bucket}")
   |> filter(fn: (r) => r["_measurement"] =~ /^wetterdaten-/)
   |> keep(columns: ["_time", "_measurement", "_field", "_value"])
 '''.strip()
+
+
+def strunde_level_rows_since_flux(bucket: str, measurement: str, field: str, start: datetime) -> str:
+    start_iso = start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    bucket_value = _flux_string(bucket)
+    measurement_value = _flux_string(measurement)
+    field_value = _flux_string(field)
+    return f'''
+from(bucket: "{bucket_value}")
+  |> range(start: time(v: "{start_iso}"))
+  |> filter(fn: (r) => r["_measurement"] == "{measurement_value}")
+  |> filter(fn: (r) => r["_field"] == "{field_value}")
+  |> keep(columns: ["_time", "_measurement", "_field", "_value"])
+'''.strip()
+
+
+def _flux_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
