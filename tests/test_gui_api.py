@@ -73,6 +73,8 @@ def test_desktop_ui_requires_gui_token():
         status_code, javascript = request_raw(base_url, "/gui/static/app.js?gui_token=secret")
         assert status_code == 200
         assert "refreshAll" in javascript
+        assert "const CHAT_TIMEOUT_MS = 180000" in javascript
+        assert "const LIVE_STATUS_TIMEOUT_MS = 180000" in javascript
 
         status_code, styles = request_raw(base_url, "/gui/static/styles.css?gui_token=secret")
         assert status_code == 200
@@ -322,7 +324,7 @@ def _settings(name: str) -> Settings:
         local_measurement="wetterdaten-gl-fw-2",
         dwd_station_id="",
         mosmix_station_id="10513",
-        model_dir=Path("tests/fixtures/missing-models"),
+        model_dir=Path(".test-runtime") / f"missing-models-{name}",
         local_cache_path=Path("tests/fixtures/local_weather_history.csv"),
         local_cache_sync_on_startup=False,
         dwd_data_path=Path(f"tests/fixtures/missing-dwd-{name}.csv"),

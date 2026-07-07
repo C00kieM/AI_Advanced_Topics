@@ -12,7 +12,7 @@ from .sync_state import attempted_today, read_sync_state, sync_state_path, write
 
 
 CACHE_COLUMNS = ["time", "measurement", "field", "value"]
-MIN_RETENTION_DAYS = 365 * 3
+RETENTION_DAYS = 365 * 3
 
 
 @dataclass(frozen=True)
@@ -36,22 +36,35 @@ class WeatherStationCsvCache:
 
     def sync(self, force: bool = False) -> CacheSyncResult:
         started_at = datetime.now(timezone.utc)
-        cutoff = started_at - timedelta(days=_retention_days(self.settings.local_cache_retention_days))
+        cutoff = retention_cutoff(started_at, self.settings.local_cache_retention_days)
         state = read_sync_state(self.state_path)
-        if not force and _has_existing_cache(self.path) and attempted_today(state, started_at):
-            row_count = _state_count(state)
+        existing = read_cache_rows(self.path)
+        pruned = prune_rows(existing, cutoff)
+        if (
+            not force
+            and pruned
+            and attempted_today(state, started_at)
+            and state.get("status") == "success"
+            and _state_count(state) > 0
+        ):
+            if len(pruned) != len(existing):
+                write_cache_rows(self.path, pruned)
+                write_sync_state(
+                    self.state_path,
+                    attempted_at=started_at,
+                    status="success",
+                    details={"existing_rows": len(existing), "fetched_rows": 0, "written_rows": len(pruned), "pruned_rows": len(existing) - len(pruned)},
+                )
             return CacheSyncResult(
                 path=self.path,
-                existing_rows=row_count,
+                existing_rows=len(existing),
                 fetched_rows=0,
-                written_rows=row_count,
+                written_rows=len(pruned),
                 cutoff=cutoff,
                 started_at=started_at,
                 skipped=True,
                 reason="InfluxDB-Update uebersprungen: Heute wurde bereits synchronisiert.",
             )
-        existing = read_cache_rows(self.path)
-        pruned = prune_rows(existing, cutoff)
         latest = latest_row_time(pruned)
         fetch_start = latest or cutoff
         try:
@@ -140,11 +153,13 @@ def sync_cache_on_startup(settings: Settings) -> CacheSyncResult | None:
 
 
 def _retention_days(configured_days: int) -> int:
-    return max(MIN_RETENTION_DAYS, configured_days)
+    return RETENTION_DAYS
 
 
-def _has_existing_cache(path: Path) -> bool:
-    return path.exists() and path.stat().st_size > 0
+def retention_cutoff(reference: datetime, configured_days: int) -> datetime:
+    reference_utc = reference.astimezone(timezone.utc)
+    cutoff_date = reference_utc.date() - timedelta(days=_retention_days(configured_days))
+    return datetime(cutoff_date.year, cutoff_date.month, cutoff_date.day, tzinfo=timezone.utc)
 
 
 def _state_count(state: dict) -> int:

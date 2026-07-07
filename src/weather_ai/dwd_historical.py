@@ -19,7 +19,7 @@ HISTORICAL_COLUMNS = DWD_DATA_COLUMNS
 DEFAULT_PARAMETERS = ("air_temperature", "precipitation", "wind")
 DEFAULT_PERIODS = ("historical", "recent")
 SKIP_COLUMNS = {"STATIONS_ID", "MESS_DATUM", "MESS_DATUM_BEGINN", "MESS_DATUM_ENDE", "QN", "QN_3", "QN_4", "eor"}
-MIN_RETENTION_DAYS = 365 * 3
+RETENTION_DAYS = 365 * 3
 
 
 class DwdHistoricalError(RuntimeError):
@@ -76,7 +76,7 @@ class DwdHistoricalClient:
         station_ids = self.settings.dwd_historical_station_ids
         if not station_ids:
             raise DwdHistoricalError("DWD_HISTORICAL_STATION_IDS is empty.")
-        cutoff = cutoff or datetime.now(timezone.utc) - timedelta(days=self.settings.dwd_historical_retention_days)
+        cutoff = cutoff or retention_cutoff(datetime.now(timezone.utc), self.settings.dwd_historical_retention_days)
         records: list[DwdHistoricalRecord] = []
         for parameter in self.settings.dwd_historical_parameters:
             for period in periods:
@@ -107,7 +107,7 @@ class DwdHistoricalClient:
         try:
             with self._opener.open(request, timeout=120) as response:
                 return response.read()
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise DwdHistoricalError(f"DWD CDC request failed for {url}: {exc}") from exc
 
 
@@ -119,23 +119,37 @@ class DwdHistoricalCsvStore:
 
     def sync(self, force: bool = False) -> DwdHistoricalSyncResult:
         started_at = datetime.now(timezone.utc)
-        cutoff = started_at - timedelta(days=_retention_days(self.settings.dwd_historical_retention_days))
+        cutoff = retention_cutoff(started_at, self.settings.dwd_historical_retention_days)
         state = read_sync_state(self.state_path)
-        if not force and _has_existing_cache(self.path) and attempted_today(state, started_at):
-            written_rows = _state_count(state)
+        existing = read_dwd_rows(self.path)
+        existing_observations = [row for row in existing if row.get("kind") == "observation"]
+        preserved_rows = [row for row in existing if row.get("kind") != "observation" and _row_time(row) and _row_time(row) >= cutoff]
+        pruned = [row for row in existing_observations if _row_time(row) and _row_time(row) >= cutoff]
+        if (
+            not force
+            and pruned
+            and attempted_today(state, started_at)
+            and state.get("status") == "success"
+            and _state_count(state) > 0
+        ):
+            if len(pruned) != len(existing_observations):
+                merged = merge_dwd_rows([*preserved_rows, *pruned])
+                write_dwd_rows(self.path, merged)
+                write_sync_state(
+                    self.state_path,
+                    attempted_at=started_at,
+                    status="success",
+                    details={"fetched_records": 0, "written_rows": len(pruned), "pruned_rows": len(existing_observations) - len(pruned)},
+                )
             return DwdHistoricalSyncResult(
                 path=self.path,
                 station_ids=self.settings.dwd_historical_station_ids,
                 fetched_records=0,
-                written_rows=written_rows,
+                written_rows=len(pruned),
                 cutoff=cutoff,
                 skipped=True,
                 reason="DWD-CDC-Update uebersprungen: Heute wurde bereits synchronisiert.",
             )
-        existing = read_dwd_rows(self.path)
-        existing_observations = [row for row in existing if row.get("kind") == "observation"]
-        preserved_rows = [row for row in existing if row.get("kind") != "observation"]
-        pruned = [row for row in existing_observations if _row_time(row) and _row_time(row) >= cutoff]
         periods = ("recent",) if pruned else DEFAULT_PERIODS
         try:
             fetched = [record.to_row() for record in DwdHistoricalClient(self.settings).fetch_records(cutoff=cutoff, periods=periods)]
@@ -177,11 +191,13 @@ class DwdHistoricalCsvStore:
 
 
 def _retention_days(configured_days: int) -> int:
-    return max(MIN_RETENTION_DAYS, configured_days)
+    return RETENTION_DAYS
 
 
-def _has_existing_cache(path: Path) -> bool:
-    return path.exists() and path.stat().st_size > 0
+def retention_cutoff(reference: datetime, configured_days: int) -> datetime:
+    reference_utc = reference.astimezone(timezone.utc)
+    cutoff_date = reference_utc.date() - timedelta(days=_retention_days(configured_days))
+    return datetime(cutoff_date.year, cutoff_date.month, cutoff_date.day, tzinfo=timezone.utc)
 
 
 def _state_count(state: dict) -> int:

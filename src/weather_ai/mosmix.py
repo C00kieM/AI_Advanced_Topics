@@ -57,7 +57,7 @@ class MosmixClient:
         try:
             with self._opener.open(request, timeout=timeout) as response:
                 return response.read()
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise MosmixError(f"MOSMIX request failed: {exc}") from exc
 
 

@@ -11,7 +11,7 @@ from .sync_state import attempted_today, read_sync_state, sync_state_path, write
 
 
 STRUNDE_COLUMNS = ["time", "measurement", "field", "value"]
-MIN_RETENTION_DAYS = 365 * 3
+RETENTION_DAYS = 365 * 3
 
 
 @dataclass(frozen=True)
@@ -43,22 +43,36 @@ class StrundeLevelCsvCache:
 
     def sync(self, force: bool = False) -> StrundeCacheSyncResult:
         started_at = datetime.now(timezone.utc)
-        cutoff = started_at - timedelta(days=max(MIN_RETENTION_DAYS, self.settings.strunde_cache_retention_days))
+        cutoff = retention_cutoff(started_at, self.settings.strunde_cache_retention_days)
         state = read_sync_state(self.state_path)
-        if not force and _has_existing_cache(self.path) and attempted_today(state, started_at):
-            row_count = _state_count(state)
+        existing = read_strunde_rows(self.path)
+        scoped_existing = _configured_rows(existing, self.settings)
+        pruned = prune_strunde_rows(scoped_existing, cutoff)
+        if (
+            not force
+            and pruned
+            and attempted_today(state, started_at)
+            and state.get("status") == "success"
+            and _state_count(state) > 0
+        ):
+            if len(pruned) != len(scoped_existing) or len(existing) != len(scoped_existing):
+                write_strunde_rows(self.path, pruned)
+                write_sync_state(
+                    self.state_path,
+                    attempted_at=started_at,
+                    status="success",
+                    details={"existing_rows": len(existing), "fetched_rows": 0, "written_rows": len(pruned), "pruned_rows": len(scoped_existing) - len(pruned)},
+                )
             return StrundeCacheSyncResult(
                 path=self.path,
-                existing_rows=row_count,
+                existing_rows=len(existing),
                 fetched_rows=0,
-                written_rows=row_count,
+                written_rows=len(pruned),
                 cutoff=cutoff,
                 started_at=started_at,
                 skipped=True,
                 reason="Strunde-Pegel-Update uebersprungen: Heute wurde bereits synchronisiert.",
             )
-        existing = read_strunde_rows(self.path)
-        pruned = prune_strunde_rows(existing, cutoff)
         latest = latest_strunde_row_time(pruned)
         fetch_start = latest or cutoff
         try:
@@ -87,6 +101,26 @@ class StrundeLevelCsvCache:
             )
         merged = merge_strunde_rows(pruned, fetched, cutoff)
         write_strunde_rows(self.path, merged)
+        if not merged:
+            warning = (
+                "Keine Strunde-Pegelwerte fuer die konfigurierte InfluxDB-Serie gefunden: "
+                f"measurement={self.settings.strunde_measurement}, field={self.settings.strunde_level_field}."
+            )
+            write_sync_state(
+                self.state_path,
+                attempted_at=started_at,
+                status="warning",
+                details={"existing_rows": len(existing), "fetched_rows": len(fetched), "written_rows": 0, "warning": warning},
+            )
+            return StrundeCacheSyncResult(
+                path=self.path,
+                existing_rows=len(existing),
+                fetched_rows=len(fetched),
+                written_rows=0,
+                cutoff=cutoff,
+                started_at=started_at,
+                warning=warning,
+            )
         write_sync_state(
             self.state_path,
             attempted_at=started_at,
@@ -109,11 +143,13 @@ class StrundeLevelCsvCache:
     def observations_between(self, start: datetime, end: datetime) -> list[StrundeLevelObservation]:
         observations: list[StrundeLevelObservation] = []
         for row in read_strunde_rows(self.path):
+            if row.get("measurement") != self.settings.strunde_measurement or row.get("field") != self.settings.strunde_level_field:
+                continue
             row_time = _row_time(row)
             if row_time is None or row_time < start or row_time >= end:
                 continue
             value = _to_float(row.get("value", ""))
-            if value is None:
+            if value is None or not _is_valid_level_cm(value):
                 continue
             observations.append(
                 StrundeLevelObservation(
@@ -126,7 +162,7 @@ class StrundeLevelCsvCache:
         return observations
 
     def latest(self) -> StrundeLevelObservation | None:
-        observations = self.observations_since(days=max(MIN_RETENTION_DAYS, self.settings.strunde_cache_retention_days))
+        observations = self.observations_since(days=RETENTION_DAYS)
         return max(observations, key=lambda item: item.time) if observations else None
 
 
@@ -195,8 +231,19 @@ def merge_strunde_rows(
     return sorted(merged.values(), key=lambda row: (row["time"], row["measurement"], row["field"]))
 
 
-def _has_existing_cache(path: Path) -> bool:
-    return path.exists() and path.stat().st_size > 0
+def _configured_rows(rows: list[dict[str, str]], settings: Settings) -> list[dict[str, str]]:
+    return [
+        row
+        for row in rows
+        if row.get("measurement") == settings.strunde_measurement
+        and row.get("field") == settings.strunde_level_field
+    ]
+
+
+def retention_cutoff(reference: datetime, configured_days: int) -> datetime:
+    reference_utc = reference.astimezone(timezone.utc)
+    cutoff_date = reference_utc.date() - timedelta(days=RETENTION_DAYS)
+    return datetime(cutoff_date.year, cutoff_date.month, cutoff_date.day, tzinfo=timezone.utc)
 
 
 def _state_count(state: dict) -> int:
@@ -223,3 +270,7 @@ def _to_float(value: str) -> float | None:
         return float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return None
+
+
+def _is_valid_level_cm(value: float) -> bool:
+    return 0.0 <= value <= 1000.0

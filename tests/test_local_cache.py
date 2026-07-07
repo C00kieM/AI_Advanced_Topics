@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from weather_ai.influx import InfluxError
-from weather_ai.local_cache import latest_row_time, merge_rows, normalize_influx_rows, prune_rows
+from weather_ai.local_cache import latest_row_time, merge_rows, normalize_influx_rows, prune_rows, retention_cutoff
 from weather_ai.local_cache import WeatherStationCsvCache
 from weather_ai.config import Settings
 
@@ -60,6 +60,13 @@ def test_merge_rows_prunes_old_rows_and_deduplicates_newer_values():
     assert merged[0]["value"] == "2"
     assert latest_row_time(merged) == datetime(2026, 5, 20, 9, 15, tzinfo=timezone.utc)
     assert prune_rows(existing, cutoff) == [existing[1]]
+
+
+def test_retention_cutoff_is_aligned_to_full_utc_day():
+    reference = datetime(2026, 7, 6, 12, 34, 56, tzinfo=timezone.utc)
+
+    assert retention_cutoff(reference, 30) == datetime(2023, 7, 7, tzinfo=timezone.utc)
+    assert retention_cutoff(reference, 3650) == datetime(2023, 7, 7, tzinfo=timezone.utc)
 
 
 def test_cache_observations_since_reads_fixed_csv():
@@ -176,10 +183,13 @@ def test_cache_sync_skips_network_when_already_attempted_today():
     settings = replace(Settings.from_env(), local_cache_path=Path("unused.csv"), local_cache_retention_days=30)
 
     with (
-        patch("weather_ai.local_cache._has_existing_cache", return_value=True),
         patch(
             "weather_ai.local_cache.read_sync_state",
-            return_value={"attempted_date": datetime.now(timezone.utc).date().isoformat()},
+            return_value={
+                "attempted_date": datetime.now(timezone.utc).date().isoformat(),
+                "status": "success",
+                "details": {"written_rows": 1},
+            },
         ),
         patch("weather_ai.local_cache.read_cache_rows", return_value=existing_rows),
         patch("weather_ai.local_cache.InfluxClient.weather_station_rows_since") as fetch_rows,
@@ -189,6 +199,35 @@ def test_cache_sync_skips_network_when_already_attempted_today():
     assert result.skipped is True
     assert result.fetched_rows == 0
     assert "Heute wurde bereits synchronisiert" in (result.reason or "")
+    fetch_rows.assert_not_called()
+
+
+def test_cache_sync_prunes_even_when_already_attempted_today():
+    existing_rows = [
+        {"time": "2022-01-01T00:00:00+00:00", "measurement": "old", "field": "Lufttemperatur", "value": "1"},
+        {"time": datetime.now(timezone.utc).isoformat(), "measurement": "new", "field": "Lufttemperatur", "value": "2"},
+    ]
+    settings = replace(Settings.from_env(), local_cache_path=Path("unused.csv"))
+
+    with (
+        patch(
+            "weather_ai.local_cache.read_sync_state",
+            return_value={
+                "attempted_date": datetime.now(timezone.utc).date().isoformat(),
+                "status": "success",
+                "details": {"written_rows": 2},
+            },
+        ),
+        patch("weather_ai.local_cache.read_cache_rows", return_value=existing_rows),
+        patch("weather_ai.local_cache.write_cache_rows") as write_cache,
+        patch("weather_ai.local_cache.write_sync_state"),
+        patch("weather_ai.local_cache.InfluxClient.weather_station_rows_since") as fetch_rows,
+    ):
+        result = WeatherStationCsvCache(settings).sync()
+
+    assert result.skipped is True
+    assert result.written_rows == 1
+    write_cache.assert_called_once_with(settings.local_cache_path, [existing_rows[1]])
     fetch_rows.assert_not_called()
 
 

@@ -110,6 +110,8 @@ Admin View is dark, operational, and may show status cards, job logs, timings, w
 
 Never commit `.env`, tokens, local CSV data, model files, or generated output. InfluxDB is read-only; keep `InfluxClient.write_forecasts()` and raw write endpoint blocking intact. New file-open targets must be explicit in `_open_file_targets()` and must point only to known local app data files.
 
+Use `OFFLINE_MODE=true` when InfluxDB/DWD/MOSMIX are unavailable or when tests must not fetch live data. In offline mode, chat and GUI status should use local CSVs plus saved `comparison_summary.json` / `training_metrics.json`; do not run sync or archive commands unless live access is explicitly intended.
+
 If adding configuration, update:
 
 - `Settings` in `config.py`

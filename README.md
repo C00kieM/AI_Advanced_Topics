@@ -23,6 +23,8 @@ Copy-Item .env.example .env
 
 Danach `.env` lokal ausfuellen. Der InfluxDB-Token gehoert nur in `.env` und niemals ins Repo.
 
+Wenn InfluxDB/DWD/MOSMIX gerade nicht erreichbar sind, setze `OFFLINE_MODE=true`. Dann nutzen Chat, GUI-Status und Prognoseantworten nur lokale CSVs, gespeicherte Forecasts und gespeicherte Modellmetriken; Sync- und Archive-Kommandos bleiben bewusst manuelle Live-Aktionen.
+
 ```powershell
 weather-chat status
 weather-chat sync-local-db
@@ -57,7 +59,7 @@ LOCAL_CACHE_RETENTION_DAYS=1095
 LOCAL_CACHE_SYNC_ON_STARTUP=true
 ```
 
-Die CSV enthaelt `time`, `measurement`, `field` und `value`. Bei jedem Start werden Zeilen aelter als 3 Jahre entfernt und neue InfluxDB-Zeilen seit dem letzten Cache-Zeitpunkt ergaenzt. Manuell kann der Sync so gestartet werden:
+Die CSV enthaelt `time`, `measurement`, `field` und `value`. Bei jedem Sync werden hoechstens die letzten 1095 vollen UTC-Tage gespeichert: Der aelteste Tag bleibt komplett erhalten und rotiert erst beim naechsten Tageswechsel heraus. Neue InfluxDB-Zeilen seit dem letzten Cache-Zeitpunkt werden ergaenzt. Manuell kann der Sync so gestartet werden:
 
 ```powershell
 weather-chat sync-local-db
@@ -89,8 +91,8 @@ Die feste DWD-Datei ist `data/dwd_weather_data.csv`. Sie enthaelt historische CD
 Strunde-Pegelwerte werden getrennt von den Wetterstationsdaten in einer eigenen lokalen CSV gehalten:
 
 ```powershell
-STRUNDE_MEASUREMENT=pegel-strunde
-STRUNDE_LEVEL_FIELD=water_level_cm
+STRUNDE_MEASUREMENT=strundepegel-gronau
+STRUNDE_LEVEL_FIELD=pegelstandgronau
 STRUNDE_CACHE_PATH=data/strunde_water_level.csv
 STRUNDE_CACHE_RETENTION_DAYS=1095
 STRUNDE_RAIN_MEASUREMENTS=

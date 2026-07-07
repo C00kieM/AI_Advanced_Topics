@@ -7,6 +7,7 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 import csv
+import json
 
 from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
@@ -23,9 +24,14 @@ _DWD_CACHE: dict[tuple[str, int, float], tuple[dict[str, Any], list[ForecastPoin
 
 
 def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) -> dict[str, Any]:
-    report = _safe_status_report(settings) if live else StatusReport()
+    offline_warning = "Offline-Modus aktiv; Livechecks werden uebersprungen."
+    report = StatusReport(warnings=[offline_warning]) if settings.offline_mode else _safe_status_report(settings) if live else StatusReport()
     local_cache = summarize_local_cache(settings.local_cache_path, selected_measurement=settings.local_measurement)
-    strunde_cache = summarize_strunde_cache(settings.strunde_cache_path)
+    strunde_cache = summarize_strunde_cache(
+        settings.strunde_cache_path,
+        measurement=settings.strunde_measurement,
+        field=settings.strunde_level_field,
+    )
     dwd_data, forecasts = summarize_dwd_data(settings.dwd_data_path, deep=deep)
     comparison = summarize_cached_comparison(settings, forecasts)
     models = summarize_models(scoped_model_dir(settings), comparison["counts"])
@@ -49,7 +55,7 @@ def build_gui_status(settings: Settings, live: bool = True, deep: bool = False) 
             "strunde_level_field": settings.strunde_level_field,
         },
         "live": {
-            "checked": live,
+            "checked": live and not settings.offline_mode,
             "influx_ok": report.influx_ok,
             "dwd_ok": report.dwd_ok,
             "local_stale": report.is_local_stale,
@@ -184,16 +190,33 @@ def summarize_dwd_data(path: Path, deep: bool = False) -> tuple[dict[str, Any], 
     return payload, forecasts
 
 
-def summarize_strunde_cache(path: Path) -> dict[str, Any]:
-    rows = read_strunde_rows(path)
-    times = [_parse_time(row.get("time", "")) for row in rows]
+def summarize_strunde_cache(path: Path, measurement: str | None = None, field: str | None = None) -> dict[str, Any]:
+    rows = [
+        row
+        for row in read_strunde_rows(path)
+        if (measurement is None or row.get("measurement") == measurement)
+        and (field is None or row.get("field") == field)
+    ]
+    valid_level_rows = [
+        row
+        for row in rows
+        if (value := _float_or_none(row.get("value", ""))) is not None
+        and 0.0 <= value <= 1000.0
+    ]
+    times = [_parse_time(row.get("time", "")) for row in valid_level_rows]
     valid_times = [item for item in times if item is not None]
     latest_time = max(valid_times) if valid_times else None
-    values = [_float_or_none(row.get("value", "")) for row in rows]
-    valid_values = [item for item in values if item is not None]
+    values = [_float_or_none(row.get("value", "")) for row in valid_level_rows]
+    valid_values = [item for item in values if item is not None and 0.0 <= item <= 1000.0]
     latest_value = None
     if latest_time is not None:
-        latest_rows = [row for row in rows if _parse_time(row.get("time", "")) == latest_time]
+        latest_rows = [
+            row
+            for row in valid_level_rows
+            if _parse_time(row.get("time", "")) == latest_time
+            and (value := _float_or_none(row.get("value", ""))) is not None
+            and 0.0 <= value <= 1000.0
+        ]
         latest_value = _float_or_none(latest_rows[-1].get("value", "")) if latest_rows else None
     return {
         "path": str(path),
@@ -210,6 +233,9 @@ def summarize_strunde_cache(path: Path) -> dict[str, Any]:
 
 
 def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoint] | None = None) -> dict[str, Any]:
+    saved = _read_saved_comparison(scoped_model_dir(settings) / "comparison_summary.json")
+    if saved is not None:
+        return saved
     if forecasts is None:
         return {
             "computed": False,
@@ -243,6 +269,36 @@ def summarize_cached_comparison(settings: Settings, forecasts: list[ForecastPoin
         "pairs": len(comparisons),
         "counts": dict(counts),
         "summary": summarize_comparisons(comparisons),
+        "trainable": {
+            variable: counts.get(variable, 0) >= TRAINING_MIN_POINTS
+            for variable in sorted(MODEL_VARIABLES)
+        },
+        "min_points": TRAINING_MIN_POINTS,
+    }
+
+
+def _read_saved_comparison(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    counts = {
+        variable: int(values.get("count", 0) or 0)
+        for variable, values in summary.items()
+        if isinstance(values, dict)
+    }
+    return {
+        "computed": True,
+        "saved": True,
+        "generated_at": payload.get("generated_at"),
+        "scope": payload.get("scope"),
+        "saved_to": str(path),
+        "pairs": int(payload.get("pairs", 0) or 0),
+        "counts": counts,
+        "summary": summary,
         "trainable": {
             variable: counts.get(variable, 0) >= TRAINING_MIN_POINTS
             for variable in sorted(MODEL_VARIABLES)

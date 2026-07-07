@@ -30,7 +30,7 @@ else:
     _FASTAPI_IMPORT_ERROR = None
 
 
-ASSET_VERSION = "20260703-strunde1"
+ASSET_VERSION = "20260706-timeout-retention1"
 
 COMMANDS = [
     {
@@ -108,7 +108,7 @@ def create_app(
         if request.url.path == "/" or request.url.path.startswith("/gui/static/"):
             response.headers["Cache-Control"] = "no-store"
         return response
-    if sync_on_startup:
+    if sync_on_startup and not settings.offline_mode:
         try:
             api.state.local_cache_sync_result = sync_cache_on_startup(settings)
         except Exception as exc:  # noqa: BLE001 - API should still start if cache sync fails.
@@ -142,6 +142,14 @@ def create_app(
 
     @api.get("/health")
     def health():
+        if settings.offline_mode:
+            return {
+                "ok": True,
+                "influx_ok": False,
+                "dwd_ok": False,
+                "warnings": ["Offline-Modus aktiv; Livechecks werden uebersprungen."],
+                "local_cache_error": api.state.local_cache_sync_error,
+            }
         status = build_status(settings)
         return {
             "ok": status.influx_ok,

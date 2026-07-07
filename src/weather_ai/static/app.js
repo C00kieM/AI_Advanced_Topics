@@ -14,6 +14,13 @@ const labels = {
   wind_speed: "Wind",
 };
 
+const API_TIMEOUT_MS = 120000;
+const CHAT_TIMEOUT_MS = 180000;
+const STATUS_TIMEOUT_MS = 90000;
+const LIVE_STATUS_TIMEOUT_MS = 180000;
+const JOB_TIMEOUT_MS = 45000;
+const FILE_TIMEOUT_MS = 30000;
+
 const $ = (id) => document.getElementById(id);
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -96,7 +103,7 @@ async function openDataFile(target, button) {
     const payload = await api("/files/open", {
       method: "POST",
       body: JSON.stringify({ target }),
-      timeout: 10000,
+      timeout: FILE_TIMEOUT_MS,
     });
     appendTerminalLine("success", `${payload.label || "Datei"} wurde geoeffnet.`);
   } catch (error) {
@@ -132,6 +139,7 @@ async function askChat(question) {
   return api("/chat", {
     method: "POST",
     body: JSON.stringify({ question }),
+    timeout: CHAT_TIMEOUT_MS,
   });
 }
 
@@ -180,7 +188,7 @@ async function refreshAll(live = false, options = {}) {
 async function refreshStatus(live, options = {}) {
   if (!options.quiet) setTerminalState(live ? "live" : "status");
   try {
-    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? 65000 : 10000 });
+    const status = await api(`/status?live=${live ? "true" : "false"}`, { timeout: live ? LIVE_STATUS_TIMEOUT_MS : STATUS_TIMEOUT_MS });
     renderStatus(status);
     if (!options.quiet && status.live?.warnings?.length) {
       appendTerminalLine("warning", `Status mit ${status.live.warnings.length} Warnung(en) aktualisiert.`);
@@ -194,7 +202,7 @@ async function refreshStatus(live, options = {}) {
 
 async function refreshJobs(options = {}) {
   try {
-    const payload = await api("/jobs", { timeout: 10000 });
+    const payload = await api("/jobs", { timeout: JOB_TIMEOUT_MS });
     renderJobs(payload.jobs || []);
   } catch (error) {
     if (!options.quiet) appendTerminalLine("error", `Jobs konnten nicht geladen werden: ${error.message || error}`);
@@ -213,7 +221,7 @@ function pollJob(jobId) {
   if (state.polling.has(jobId)) return;
   const timer = setInterval(async () => {
     try {
-      const job = await api(`/jobs/${jobId}`, { timeout: 10000 });
+      const job = await api(`/jobs/${jobId}`, { timeout: JOB_TIMEOUT_MS });
       renderJobLogs(job);
       await refreshJobs({ quiet: true });
       if (["succeeded", "failed"].includes(job.status)) {
@@ -449,7 +457,7 @@ function renderJobs(jobs) {
 
 async function api(path, options = {}) {
   const controller = new AbortController();
-  const timeout = options.timeout || 30000;
+  const timeout = options.timeout || API_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(path, {

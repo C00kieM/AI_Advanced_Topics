@@ -42,7 +42,7 @@ class DwdClient:
         try:
             with self._opener.open(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise DwdError(f"DWD request failed: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise DwdError(f"DWD response was not JSON: {exc}") from exc

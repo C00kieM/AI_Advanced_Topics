@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import csv
 
@@ -11,6 +11,7 @@ from .models import ForecastPoint
 
 
 FORECAST_COLUMNS = DWD_DATA_COLUMNS
+RETENTION_DAYS = 365 * 3
 
 
 @dataclass(frozen=True)
@@ -23,13 +24,15 @@ class ForecastArchiveResult:
 
 class ForecastCsvArchive:
     def __init__(self, settings: Settings):
+        self.settings = settings
         self.path = settings.dwd_data_path
 
     def append(self, forecasts: list[ForecastPoint]) -> ForecastArchiveResult:
+        cutoff = retention_cutoff(datetime.now(timezone.utc))
         existing = read_dwd_rows(self.path)
         forecast_rows = [row for row in existing if row.get("kind") == "forecast"]
         preserved_rows = [row for row in existing if row.get("kind") != "forecast"]
-        merged_forecasts = merge_forecast_rows(forecast_rows, [forecast_to_row(item) for item in forecasts])
+        merged_forecasts = merge_forecast_rows(forecast_rows, [forecast_to_row(item) for item in forecasts], cutoff=cutoff)
         merged = merge_dwd_rows([*preserved_rows, *merged_forecasts])
         write_dwd_rows(self.path, merged)
         return ForecastArchiveResult(
@@ -69,9 +72,16 @@ def write_forecast_rows(path: Path, rows: list[dict[str, str]]) -> None:
     write_dwd_rows(path, merge_dwd_rows(rows))
 
 
-def merge_forecast_rows(existing_rows: list[dict[str, str]], new_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+def merge_forecast_rows(
+    existing_rows: list[dict[str, str]],
+    new_rows: list[dict[str, str]],
+    cutoff: datetime | None = None,
+) -> list[dict[str, str]]:
     merged: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
     for row in [*existing_rows, *new_rows]:
+        valid_at = _row_time(row.get("valid_at", ""))
+        if cutoff is not None and (valid_at is None or valid_at < cutoff):
+            continue
         key = (row["source"], row["station_id"], row["field"], row["issued_at"], row["valid_at"])
         merged[key] = {column: row.get(column, "") for column in FORECAST_COLUMNS}
     return sorted(merged.values(), key=lambda row: (row["issued_at"], row["valid_at"], row["station_id"], row["field"]))
@@ -108,6 +118,21 @@ def row_to_forecast(row: dict[str, str]) -> ForecastPoint:
         unit=row.get("unit", ""),
         raw_name=row.get("raw_name", ""),
     )
+
+
+def retention_cutoff(reference: datetime) -> datetime:
+    reference_utc = reference.astimezone(timezone.utc)
+    cutoff_date = reference_utc.date() - timedelta(days=RETENTION_DAYS)
+    return datetime(cutoff_date.year, cutoff_date.month, cutoff_date.day, tzinfo=timezone.utc)
+
+
+def _row_time(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return _parse_time(value)
+    except ValueError:
+        return None
 
 
 def _parse_time(value: str) -> datetime:

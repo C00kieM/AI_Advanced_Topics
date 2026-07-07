@@ -12,6 +12,7 @@ from weather_ai.dwd_historical import (
     cdc_directory_url,
     merge_historical_rows,
     parse_cdc_zip,
+    retention_cutoff,
     zip_links_for_station,
 )
 
@@ -65,6 +66,13 @@ def test_merge_historical_rows_deduplicates_by_station_dataset_field_time():
     assert merged[0]["source_url"] == "new"
 
 
+def test_dwd_retention_cutoff_is_aligned_to_full_utc_day():
+    reference = datetime(2026, 7, 6, 12, 34, 56, tzinfo=timezone.utc)
+
+    assert retention_cutoff(reference, 30) == datetime(2023, 7, 7, tzinfo=timezone.utc)
+    assert retention_cutoff(reference, 3650) == datetime(2023, 7, 7, tzinfo=timezone.utc)
+
+
 def test_dwd_historical_sync_skips_network_when_already_attempted_today():
     settings = replace(Settings.from_env(), dwd_data_path=Path("unused-dwd.csv"))
     existing = [
@@ -79,11 +87,14 @@ def test_dwd_historical_sync_skips_network_when_already_attempted_today():
     ]
 
     with (
-        patch("weather_ai.dwd_historical._has_existing_cache", return_value=True),
         patch("weather_ai.dwd_historical.read_dwd_rows", return_value=existing),
         patch(
             "weather_ai.dwd_historical.read_sync_state",
-            return_value={"attempted_date": datetime.now(timezone.utc).date().isoformat()},
+            return_value={
+                "attempted_date": datetime.now(timezone.utc).date().isoformat(),
+                "status": "success",
+                "details": {"written_rows": 1},
+            },
         ),
         patch("weather_ai.dwd_historical.DwdHistoricalClient.fetch_records") as fetch_records,
     ):
@@ -92,6 +103,50 @@ def test_dwd_historical_sync_skips_network_when_already_attempted_today():
     assert result.skipped is True
     assert result.fetched_records == 0
     assert "Heute wurde bereits synchronisiert" in (result.reason or "")
+    fetch_records.assert_not_called()
+
+
+def test_dwd_historical_sync_prunes_even_when_already_attempted_today():
+    settings = replace(Settings.from_env(), dwd_data_path=Path("unused-dwd.csv"))
+    existing = [
+        {
+            "kind": "observation",
+            "time": "2022-01-01T00:00:00+00:00",
+            "station_id": "02667",
+            "dataset": "air_temperature",
+            "field": "TT_10",
+            "value": "1",
+        },
+        {
+            "kind": "observation",
+            "time": datetime.now(timezone.utc).isoformat(),
+            "station_id": "02667",
+            "dataset": "air_temperature",
+            "field": "TT_10",
+            "value": "2",
+        },
+    ]
+
+    with (
+        patch("weather_ai.dwd_historical.read_dwd_rows", return_value=existing),
+        patch(
+            "weather_ai.dwd_historical.read_sync_state",
+            return_value={
+                "attempted_date": datetime.now(timezone.utc).date().isoformat(),
+                "status": "success",
+                "details": {"written_rows": 2},
+            },
+        ),
+        patch("weather_ai.dwd_historical.write_dwd_rows") as write_rows,
+        patch("weather_ai.dwd_historical.write_sync_state"),
+        patch("weather_ai.dwd_historical.DwdHistoricalClient.fetch_records") as fetch_records,
+    ):
+        result = DwdHistoricalCsvStore(settings).sync()
+
+    assert result.skipped is True
+    assert result.written_rows == 1
+    written = write_rows.call_args.args[1]
+    assert [row["value"] for row in written] == ["2"]
     fetch_records.assert_not_called()
 
 

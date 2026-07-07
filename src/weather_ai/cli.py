@@ -73,6 +73,8 @@ def _cmd_sync_strunde() -> None:
 
 def _settings_with_startup_sync() -> Settings:
     settings = Settings.from_env()
+    if settings.offline_mode:
+        return settings
     try:
         sync_cache_on_startup(settings)
     except Exception as exc:  # noqa: BLE001 - cache sync must not block diagnostics/chat.

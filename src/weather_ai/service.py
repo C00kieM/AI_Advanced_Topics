@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from math import ceil
+from pathlib import Path
+from typing import Any
+import json
 
 from .comparison import match_forecasts_to_observations, summarize_comparisons
 from .config import Settings
@@ -47,10 +50,14 @@ class WeatherService:
 
     def latest_comparison_summary(self, station_scope: StationScope | None = None) -> dict[str, object]:
         comparisons = self._comparison_points(station_scope)
-        return {
+        payload = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "scope": _scope_payload(station_scope),
             "pairs": len(comparisons),
             "summary": summarize_comparisons(comparisons),
         }
+        path = _write_json(scoped_model_dir(self.settings, station_scope), "comparison_summary.json", payload)
+        return {**payload, "saved_to": str(path)}
 
     def train(self, station_scope: StationScope | None = None) -> dict[str, object]:
         model_dir = scoped_model_dir(self.settings, station_scope)
@@ -59,7 +66,8 @@ class WeatherService:
         profiles_written = 0
         if result.trained:
             profiles_written = self._store_daily_profiles(self.forecast_archive.read(), model_dir=model_dir)
-        return {
+        payload = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
             "trained": result.trained,
             "message": result.message,
             "metrics": result.metrics,
@@ -67,6 +75,8 @@ class WeatherService:
             "profiles_written": profiles_written,
             "scope": _scope_payload(station_scope),
         }
+        path = _write_json(model_dir, "training_metrics.json", payload)
+        return {**payload, "metrics_saved_to": str(path)}
 
     def _store_daily_profiles(self, forecasts: list[ForecastPoint], model_dir=None) -> int:
         model_dir = model_dir or scoped_model_dir(self.settings)
@@ -111,3 +121,10 @@ def _scope_payload(station_scope: StationScope | None) -> dict[str, object]:
         "label": station_scope.label,
         "measurements": sorted(station_scope.measurements) if station_scope.measurements else None,
     }
+
+
+def _write_json(directory: Path, filename: str, payload: dict[str, Any]) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / filename
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path

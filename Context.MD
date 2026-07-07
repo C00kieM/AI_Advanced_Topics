@@ -49,7 +49,8 @@ Aktueller lokaler Datenstand vom 25.06.2026:
 
 Der MVP pflegt lokal `data/local_weather_history.csv` als kleine Rolling-Window-Datenbank fuer alle InfluxDB-Measurements mit Prefix `wetterdaten-`. Beim Start wird die Datei synchronisiert:
 
-- Zeilen aelter als `LOCAL_CACHE_RETENTION_DAYS=1095` werden entfernt.
+- Gespeichert werden maximal die letzten 1095 vollen UTC-Tage; hoehere Retention-Werte werden nicht genutzt.
+- Der aelteste Tag bleibt komplett erhalten und wird erst beim naechsten Tageswechsel als ganzer entfernt.
 - Neue InfluxDB-Zeilen seit dem letzten Cache-Zeitpunkt werden ergaenzt.
 - Duplikate werden ueber `time`, `measurement` und `field` zusammengefuehrt.
 - Die Datei ist lokal und wird nicht versioniert.
@@ -65,7 +66,7 @@ Lokaler Default:
 - Station: `02667` Koeln/Bonn
 - Aufloesung: `10_minutes`
 - Parameter: `air_temperature`, `precipitation`, `wind`
-- Retention: 1095 Tage
+- Retention: maximal 1095 volle UTC-Tage fuer historische Messwerte und archivierte Forecasts
 
 Die DWD-Datei enthaelt historische Messwerte und MOSMIX-Prognosen. Die Spalten sind `kind`, `time`, `station_id`, `dataset`, `field`, `value`, `quality`, `source_url`, `source`, `issued_at`, `valid_at`, `horizon_hours`, `unit`, `raw_name`.
 
@@ -112,12 +113,16 @@ Alte Zwischenartefakte wie `data/dwd_forecast_archive.csv`, `data/dwd_historical
 
 Die Strunde-Erweiterung liest Pegelwerte read-only aus InfluxDB und schreibt sie in `data/strunde_water_level.csv`. Relevante Konfiguration:
 
-- `STRUNDE_MEASUREMENT=pegel-strunde`
-- `STRUNDE_LEVEL_FIELD=water_level_cm`
-- `STRUNDE_CACHE_RETENTION_DAYS=1095`
+- `STRUNDE_MEASUREMENT=strundepegel-gronau`
+- `STRUNDE_LEVEL_FIELD=pegelstandgronau`
+- `STRUNDE_CACHE_RETENTION_DAYS=1095`; gespeichert werden maximal 1095 volle UTC-Tage
 - optional `STRUNDE_RAIN_MEASUREMENTS` als kommaseparierte Liste der Regenmessungen, die fuer die Regen/Pegel-Korrelation genutzt werden sollen
 
 Wenn InfluxDB offline ist, bleibt ein vorhandener Strunde-Cache nutzbar. Ohne Pegelcache beantwortet der Chat Strunde-Fragen bewusst mit „nicht verfuegbar“, statt Werte zu erfinden. Prognosen sind vorsichtig: ohne gespeicherte DWD-Niederschlagsprognose wird keine Pegelhoehe extrapoliert.
+
+## Offline-Modus
+
+`OFFLINE_MODE=true` verhindert automatische Live-Abrufe in Chat, GUI-Status, Healthcheck und CLI-Startup-Sync. Die App nutzt dann lokale CSVs, gespeicherte Forecasts, `comparison_summary.json` und `training_metrics.json`. Explizite Sync-/Archive-Kommandos bleiben Live-Aktionen und sollten bei nicht erreichbarer InfluxDB/DWD nicht gestartet werden.
 
 Externe Recherche: PEGELONLINE bietet eine offizielle REST-API fuer gewässerkundliche Pegeldaten, aber laut Dokumentation nur 30 Tage rueckwirkend und stationenbasiert per UUID. Eine belastbare oeffentliche Strunde-spezifische API wurde nicht als Projektquelle uebernommen; die Strunde-Datenquelle bleibt deshalb die lokale InfluxDB.
 

@@ -225,6 +225,116 @@ def test_chat_answers_tomorrow_with_dwd_and_local_daily_profiles():
     assert "zuletzt gespeicherte Tagesprofil" not in answer
 
 
+def test_chat_answers_weekday_with_day_forecast_not_current_values():
+    settings = _settings()
+    now = datetime(2026, 7, 6, 10, tzinfo=timezone.utc)
+    target = datetime(2026, 7, 9, tzinfo=timezone.utc).date()
+    profiles = [
+        DailyProfile(
+            generated_at=now,
+            source="dwd",
+            target_date=target,
+            variable="temperature",
+            min_value=21.0,
+            max_value=29.0,
+            min_at=datetime(2026, 7, 9, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 7, 9, 15, tzinfo=timezone.utc),
+            avg_value=25.0,
+            points=24,
+            issued_at=now,
+        ),
+        DailyProfile(
+            generated_at=now,
+            source="local-corrected",
+            target_date=target,
+            variable="temperature",
+            min_value=20.0,
+            max_value=27.0,
+            min_at=datetime(2026, 7, 9, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 7, 9, 14, tzinfo=timezone.utc),
+            avg_value=24.0,
+            points=24,
+            issued_at=now,
+        ),
+        DailyProfile(
+            generated_at=now,
+            source="dwd",
+            target_date=target,
+            variable="wind_speed",
+            min_value=2.0,
+            max_value=6.0,
+            min_at=datetime(2026, 7, 9, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 7, 9, 15, tzinfo=timezone.utc),
+            avg_value=4.0,
+            points=24,
+            issued_at=now,
+        ),
+        DailyProfile(
+            generated_at=now,
+            source="dwd",
+            target_date=target,
+            variable="precipitation",
+            min_value=0.0,
+            max_value=0.1,
+            min_at=datetime(2026, 7, 9, 6, tzinfo=timezone.utc),
+            max_at=datetime(2026, 7, 9, 15, tzinfo=timezone.utc),
+            avg_value=0.0,
+            points=24,
+            issued_at=now,
+        ),
+    ]
+
+    with (
+        patch("weather_ai.chat._now_utc", return_value=now),
+        patch("weather_ai.chat.latest_profiles_for_date", return_value=profiles),
+        patch("weather_ai.chat.build_status", side_effect=AssertionError("current status not expected")),
+        patch("weather_ai.chat.MosmixClient.fetch_forecasts", side_effect=AssertionError("live forecast not expected")),
+    ):
+        answer = ChatService(settings).answer("wie wird das wetter am donnerstag?")
+
+    assert "Fuer Donnerstag (09.07.2026) sieht DWD den waermsten Zeitpunkt" in answer
+    assert "Temperatur: DWD **21 bis 29 °C**; lokal korrigiert **20 bis 27 °C**." in answer
+    assert "Wind: DWD 2 bis 6 m/s" in answer
+    assert "Niederschlag: DWD 0 bis 0,1 mm" in answer
+    assert "neueste lokale Messwert" not in answer
+    assert "zuletzt" not in answer
+
+
+def test_chat_routes_regnet_weekday_to_day_forecast():
+    settings = _settings()
+    now = datetime(2026, 7, 6, 10, tzinfo=timezone.utc)
+    target = datetime(2026, 7, 9, tzinfo=timezone.utc).date()
+    profiles = [
+        DailyProfile(now, "dwd", target, "precipitation", 0.0, 1.2, datetime(2026, 7, 9, 6, tzinfo=timezone.utc), datetime(2026, 7, 9, 15, tzinfo=timezone.utc), 0.2, 24, now),
+    ]
+
+    with (
+        patch("weather_ai.chat._now_utc", return_value=now),
+        patch("weather_ai.chat.latest_profiles_for_date", return_value=profiles),
+        patch("weather_ai.chat.build_status", side_effect=AssertionError("current status not expected")),
+    ):
+        answer = ChatService(settings).answer("Regnet es am Donnerstag?")
+
+    assert "Fuer Donnerstag (09.07.2026)" in answer
+    assert "Niederschlag: DWD 0 bis 1,2 mm" in answer
+
+
+def test_chat_offline_mode_does_not_fetch_live_forecast_for_missing_day_cache():
+    settings = replace(_settings(), offline_mode=True, dwd_data_path=Path("tests/fixtures/missing-offline-day.csv"))
+    now = datetime(2026, 7, 6, 10, tzinfo=timezone.utc)
+
+    with (
+        patch("weather_ai.chat._now_utc", return_value=now),
+        patch("weather_ai.chat.latest_profiles_for_date", return_value=[]),
+        patch("weather_ai.chat.MosmixClient.fetch_forecasts", side_effect=AssertionError("live fetch not expected")),
+        patch("weather_ai.chat.DwdClient.fetch_forecasts", side_effect=AssertionError("live fetch not expected")),
+    ):
+        answer = ChatService(settings).answer("wie wird das wetter am donnerstag?")
+
+    assert "keine passende DWD-Tagesprognose" in answer
+    assert "Offline-Modus aktiv" in answer
+
+
 def test_chat_answers_future_month_as_planning_not_full_month_forecast():
     settings = _settings()
     now = datetime(2026, 7, 1, 10, tzinfo=timezone.utc)

@@ -49,11 +49,12 @@ class Settings:
     dwd_historical_parameters: list[str]
     dwd_historical_retention_days: int
     dwd_data_path: Path
-    strunde_measurement: str = "pegel-strunde"
-    strunde_level_field: str = "water_level_cm"
+    strunde_measurement: str = "strundepegel-gronau"
+    strunde_level_field: str = "pegelstandgronau"
     strunde_cache_path: Path = Path("data/strunde_water_level.csv")
     strunde_cache_retention_days: int = 1095
     strunde_rain_measurements: tuple[str, ...] = ()
+    offline_mode: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -90,11 +91,12 @@ class Settings:
             ],
             dwd_historical_retention_days=int(os.getenv("DWD_HISTORICAL_RETENTION_DAYS", "1095")),
             dwd_data_path=Path(os.getenv("DWD_DATA_PATH", "data/dwd_weather_data.csv")),
-            strunde_measurement=os.getenv("STRUNDE_MEASUREMENT", "pegel-strunde"),
-            strunde_level_field=os.getenv("STRUNDE_LEVEL_FIELD", "water_level_cm"),
+            strunde_measurement=os.getenv("STRUNDE_MEASUREMENT", "strundepegel-gronau"),
+            strunde_level_field=os.getenv("STRUNDE_LEVEL_FIELD", "pegelstandgronau"),
             strunde_cache_path=Path(os.getenv("STRUNDE_CACHE_PATH", "data/strunde_water_level.csv")),
             strunde_cache_retention_days=int(os.getenv("STRUNDE_CACHE_RETENTION_DAYS", "1095")),
             strunde_rain_measurements=_csv_tuple(os.getenv("STRUNDE_RAIN_MEASUREMENTS", "")),
+            offline_mode=os.getenv("OFFLINE_MODE", "false").lower() in {"1", "true", "yes", "on"},
         )
 
     @property

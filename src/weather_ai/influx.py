@@ -6,6 +6,7 @@ import io
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Iterable
 
 from .config import Settings
 from .models import LOCAL_FIELD_MAP, LocalObservation
@@ -60,12 +61,11 @@ class InfluxClient:
         try:
             with self._open(request, timeout=timeout) as response:
                 payload = response.read().decode("utf-8-sig")
-        except urllib.error.URLError as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise InfluxError(f"InfluxDB query failed: {exc}") from exc
         if not payload.strip():
             return []
-        reader = csv.DictReader(io.StringIO(payload))
-        return [row for row in reader if row and row.get("_time") != "_time"]
+        return _parse_query_csv_payload(payload)
 
     def latest_observations(self, measurement: str | None = None, days: int = 365, timeout: int = 15) -> list[LocalObservation]:
         measurement = measurement or self.settings.local_measurement
@@ -192,3 +192,24 @@ from(bucket: "{bucket_value}")
 
 def _flux_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _parse_query_csv_payload(payload: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    columns: list[str] | None = None
+    for parsed in csv.reader(io.StringIO(payload)):
+        if not parsed:
+            continue
+        if parsed[0].startswith("#"):
+            continue
+        if "_time" in parsed and "_value" in parsed:
+            columns = parsed
+            continue
+        if columns is None:
+            continue
+        if len(parsed) < len(columns):
+            parsed = [*parsed, *([""] * (len(columns) - len(parsed)))]
+        row = {column: parsed[index] for index, column in enumerate(columns)}
+        if row.get("_time") and row.get("_time") != "_time":
+            rows.append(row)
+    return rows

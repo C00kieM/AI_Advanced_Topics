@@ -44,6 +44,16 @@ MONTHS_DE = {
     "dezember": 12,
 }
 
+WEEKDAYS_DE = {
+    "montag": 0,
+    "dienstag": 1,
+    "mittwoch": 2,
+    "donnerstag": 3,
+    "freitag": 4,
+    "samstag": 5,
+    "sonntag": 6,
+}
+
 DWD_HISTORY_FIELD_MAP = {
     "TT_10": "temperature",
     "RWS_10": "precipitation",
@@ -94,8 +104,14 @@ class ChatService:
         date_period = _parse_specific_date_period(question)
         if date_period is not None:
             if date_period.start > now:
-                return _future_limit_answer(date_period, _add_months(now, 6))
+                limit = _add_months(now, 6)
+                if date_period.start > limit:
+                    return _future_limit_answer(date_period, limit)
+                return self._answer_forecast_day(question, station_scope, date_period)
             return self._answer_historical(question, date_period, station_scope)
+        weekday_period = _parse_weekday_forecast_period(question, now)
+        if weekday_period is not None:
+            return self._answer_forecast_day(question, station_scope, weekday_period)
         relative_periods = _parse_relative_past_periods(question, now)
         if relative_periods:
             return "\n\n".join(self._answer_historical(question, period, station_scope) for period in relative_periods)
@@ -110,7 +126,8 @@ class ChatService:
                 return _future_limit_answer(year_period, _add_months(now, 6))
             return self._answer_historical(question, year_period, station_scope)
         if _is_tomorrow_forecast_question(question):
-            return self._answer_tomorrow(question, station_scope)
+            target = (datetime.now(LOCAL_TZ) + timedelta(days=1)).date()
+            return self._answer_forecast_day(question, station_scope, _day_period(target, "morgen"))
 
         status = build_status(self.settings)
         forecasts, forecast_error = self._fetch_forecasts()
@@ -124,10 +141,20 @@ class ChatService:
         return "\n".join(lines)
 
     def _answer_tomorrow(self, question: str, station_scope: StationScope) -> str:
-        target_date = (datetime.now(timezone.utc) + timedelta(days=1)).date()
+        target_date = (datetime.now(LOCAL_TZ) + timedelta(days=1)).date()
+        return self._answer_forecast_day(question, station_scope, _day_period(target_date, "morgen"))
+
+    def _answer_forecast_day(self, question: str, station_scope: StationScope, period: HistoricalPeriod) -> str:
+        target_date = period.start.astimezone(LOCAL_TZ).date()
         profiles = [] if station_scope.is_single else latest_profiles_for_date(daily_profile_path(self.settings), target_date)
         if not profiles:
-            forecasts = ForecastCsvArchive(self.settings).read()
+            forecasts = _forecasts_for_period(ForecastCsvArchive(self.settings).read(), period)
+            forecast_error = None
+            if not forecasts:
+                forecasts, forecast_error = self._fetch_forecasts()
+                forecasts = _forecasts_for_period(forecasts, period)
+            if not forecasts:
+                return _forecast_day_missing_answer(period, forecast_error)
             generated_at = datetime.now(timezone.utc)
             profiles = [
                 *profiles_for_forecasts(forecasts, source="dwd", generated_at=generated_at),
@@ -143,13 +170,15 @@ class ChatService:
         dwd_temperature = _profile_for(profiles, "dwd", "temperature")
         local_temperature = _profile_for(profiles, "local-corrected", "temperature")
         lines = [
-            _tomorrow_headline(dwd_temperature, local_temperature),
+            _forecast_day_headline(period, dwd_temperature, local_temperature),
             "",
-            *_tomorrow_profile_lines(profiles),
+            *_forecast_day_profile_lines(profiles),
         ]
         return "\n".join(lines)
 
     def _fetch_forecasts(self) -> tuple[list[ForecastPoint], str | None]:
+        if self.settings.offline_mode:
+            return [], "Offline-Modus aktiv; Live-DWD/MOSMIX-Abruf wird uebersprungen."
         if self.settings.has_mosmix_station:
             try:
                 forecasts = MosmixClient(self.settings).fetch_forecasts()
@@ -342,16 +371,26 @@ def _forecast_lines(forecasts: list[ForecastPoint], forecast_error: str | None) 
     return lines
 
 
-def _tomorrow_headline(dwd_temperature: DailyProfile | None, local_temperature: DailyProfile | None) -> str:
+def _forecast_day_headline(
+    period: HistoricalPeriod,
+    dwd_temperature: DailyProfile | None,
+    local_temperature: DailyProfile | None,
+) -> str:
     if dwd_temperature is None:
-        return "Fuer morgen liegt noch kein gespeichertes DWD-Tagesprofil vor. Bitte zuerst /archive ausfuehren."
-    dwd = f"Fuer morgen sieht DWD den waermsten Zeitpunkt gegen {_time_label(dwd_temperature.max_at)}."
+        return f"Fuer {period.label} liegt noch keine DWD-Tagesprognose vor. Bitte zuerst /archive ausfuehren."
+    label = "morgen" if period.label.startswith("morgen") else period.label
+    dwd = f"Fuer {label} sieht DWD den waermsten Zeitpunkt gegen {_time_label(dwd_temperature.max_at)}."
     if local_temperature is None:
         return dwd + " Eine lokale Korrektur ist noch nicht verfuegbar."
     return dwd + f" Lokal liegt der waermste Zeitpunkt voraussichtlich gegen {_time_label(local_temperature.max_at)}."
 
 
-def _tomorrow_profile_lines(profiles: list[DailyProfile]) -> list[str]:
+def _tomorrow_headline(dwd_temperature: DailyProfile | None, local_temperature: DailyProfile | None) -> str:
+    period = _day_period((datetime.now(LOCAL_TZ) + timedelta(days=1)).date(), "morgen")
+    return _forecast_day_headline(period, dwd_temperature, local_temperature)
+
+
+def _forecast_day_profile_lines(profiles: list[DailyProfile]) -> list[str]:
     if not profiles:
         return [
             "Temperatur: kein gespeichertes Tagesprofil verfuegbar.",
@@ -386,6 +425,24 @@ def _tomorrow_profile_lines(profiles: list[DailyProfile]) -> list[str]:
     return lines
 
 
+def _tomorrow_profile_lines(profiles: list[DailyProfile]) -> list[str]:
+    return _forecast_day_profile_lines(profiles)
+
+
+def _forecast_day_missing_answer(period: HistoricalPeriod, forecast_error: str | None) -> str:
+    lines = [
+        f"Fuer {period.label} finde ich aktuell keine passende DWD-Tagesprognose.",
+        "Temperatur: nicht verfuegbar.",
+        "Wind: nicht verfuegbar.",
+        "Niederschlag: nicht verfuegbar.",
+    ]
+    if forecast_error:
+        lines.append(f"Hinweis: {forecast_error}")
+    else:
+        lines.append("Hinweis: Bitte zuerst /archive ausfuehren, damit die aktuelle DWD-Prognose gespeichert wird.")
+    return "\n".join(lines)
+
+
 def _profile_for(profiles: list[DailyProfile], source: str, variable: str) -> DailyProfile | None:
     candidates = [item for item in profiles if item.source == source and item.variable == variable]
     if not candidates:
@@ -398,6 +455,14 @@ def _is_tomorrow_forecast_question(question: str) -> bool:
     return "morgen" in normalized and any(
         token in normalized for token in ("wetter", "temperatur", "grad", "warm", "heiss", "prognose")
     )
+
+
+def _forecasts_for_period(forecasts: list[ForecastPoint], period: HistoricalPeriod) -> list[ForecastPoint]:
+    return [
+        item
+        for item in forecasts
+        if period.start <= item.valid_at < period.end
+    ]
 
 
 def _time_label(value: datetime) -> str:
@@ -451,6 +516,24 @@ def _parse_specific_date_period(question: str) -> HistoricalPeriod | None:
     if match:
         return _date_period(int(match.group(3)), MONTHS_DE[match.group(2)], int(match.group(1)))
     return None
+
+
+def _parse_weekday_forecast_period(question: str, now: datetime) -> HistoricalPeriod | None:
+    normalized = _normalize_german_text(question)
+    if not any(token in normalized for token in ("wetter", "temperatur", "wind", "regen", "regnet", "regnen", "schauer", "niederschlag", "warm", "kalt", "prognose")):
+        return None
+    names = "|".join(WEEKDAYS_DE)
+    match = re.search(rf"\b(?:am|fuer|für|naechsten|nachsten|kommenden)?\s*({names})\b", normalized)
+    if not match:
+        return None
+    weekday_name = match.group(1)
+    target_weekday = WEEKDAYS_DE[weekday_name]
+    today = now.astimezone(LOCAL_TZ).date()
+    days_ahead = (target_weekday - today.weekday()) % 7
+    if days_ahead == 0 and any(token in normalized for token in ("naechsten", "nachsten", "kommenden")):
+        days_ahead = 7
+    target = today + timedelta(days=days_ahead)
+    return _day_period(target, weekday_name.capitalize())
 
 
 def _parse_month_period(question: str, now: datetime) -> HistoricalPeriod | None:
@@ -1075,4 +1158,6 @@ def _format_metric(value: object, decimals: int = 1) -> str:
     if number is None:
         return "-"
     text = f"{number:.{decimals}f}".rstrip("0").rstrip(".")
+    if decimals == 0:
+        text = f"{number:.0f}"
     return text.replace(".", ",")

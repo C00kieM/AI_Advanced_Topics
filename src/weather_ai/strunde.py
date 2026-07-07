@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import sqrt
 from statistics import mean
 
 from .config import Settings
+from .daily_profile import latest_profiles_for_date, daily_profile_path
+from .dwd import DwdClient
 from .forecast_archive import ForecastCsvArchive
 from .local_cache import WeatherStationCsvCache
 from .models import ForecastPoint, LOCAL_FIELD_MAP, LocalObservation
+from .mosmix import MosmixClient
 from .strunde_cache import StrundeLevelCsvCache, StrundeLevelObservation
 
 
@@ -55,9 +59,11 @@ class StrundeService:
         lines = [
             f"Die Strunde liegt aktuell bei {_format_level(latest.value_cm)}.",
             f"Letzter Pegelwert: {_format_datetime(latest.time)}.",
-            "",
-            _model_context_line(model),
         ]
+        stale_line = _stale_level_line(latest.time)
+        if stale_line:
+            lines.append(stale_line)
+        lines.extend(["", _model_context_line(model)])
         return "\n".join(lines)
 
     def history_answer(self, label: str, start: datetime, end: datetime) -> str:
@@ -102,17 +108,19 @@ class StrundeService:
             return "\n".join(
                 [
                     f"Die Strunde liegt aktuell bei {_format_level(latest.value_cm)}.",
-                    "Eine Pegelprognose ist ohne gespeicherte DWD-Niederschlagsprognose fuer den Zeitraum nicht belastbar.",
+                    "Eine Pegelprognose ist ohne aktuelle DWD-Niederschlagsprognose fuer den Zeitraum nicht belastbar.",
                     rain_line,
                     _model_context_line(model),
                 ]
             )
         if not model.usable:
+            lower, upper, trend = _heuristic_level_range(latest.value_cm, expected_rain)
             return "\n".join(
                 [
                     f"Die Strunde liegt aktuell bei {_format_level(latest.value_cm)}.",
-                    "Eine belastbare Pegelprognose ist noch nicht moeglich, weil zu wenige passende Pegel- und Niederschlagsdaten vorhanden sind.",
+                    f"Meine vorsichtige Prognose: In den naechsten {horizon_hours} Stunden bleibt der Pegel voraussichtlich {trend}, grob bei {_format_level(lower)} bis {_format_level(upper)}.",
                     rain_line,
+                    "Hinweis: Die lokale Regen/Pegel-Korrektur ist noch unsicher; ich nutze deshalb vor allem die DWD-Niederschlagsprognose.",
                     _model_context_line(model),
                 ]
             )
@@ -147,12 +155,58 @@ class StrundeService:
         try:
             forecasts = self.forecast_archive.read()
         except Exception:  # noqa: BLE001 - chat should degrade if archive is missing/corrupt.
-            return []
-        return [
+            forecasts = []
+        archived = [
             item
             for item in forecasts
             if item.variable == "precipitation" and now <= item.valid_at <= now + timedelta(hours=horizon_hours)
         ]
+        archived = _latest_forecasts_by_valid_time(archived)
+        if archived and (self.settings.offline_mode or not _forecast_run_is_stale(archived, now)):
+            return archived
+        live = [
+            item
+            for item in self._current_forecasts()
+            if item.variable == "precipitation" and now <= item.valid_at <= now + timedelta(hours=horizon_hours)
+        ]
+        live = _latest_forecasts_by_valid_time(live)
+        return live or archived or self._precipitation_profile_forecasts(now, horizon_hours)
+
+    def _precipitation_profile_forecasts(self, now: datetime, horizon_hours: int) -> list[ForecastPoint]:
+        end = now + timedelta(hours=horizon_hours)
+        day = now.date()
+        points: list[ForecastPoint] = []
+        while day <= end.date():
+            profiles = latest_profiles_for_date(daily_profile_path(self.settings), day)
+            for profile in profiles:
+                if profile.source != "dwd" or profile.variable != "precipitation":
+                    continue
+                value = max(0.0, profile.avg_value * profile.points)
+                points.append(
+                    ForecastPoint(
+                        source="dwd-daily-profile",
+                        station_id="",
+                        variable="precipitation",
+                        value=value,
+                        issued_at=profile.issued_at,
+                        valid_at=profile.max_at,
+                        horizon_hours=max(0.0, (profile.max_at - now).total_seconds() / 3600),
+                    )
+                )
+            day = day + timedelta(days=1)
+        return [item for item in points if now.date() <= item.valid_at.date() <= end.date()]
+
+    def _current_forecasts(self) -> list[ForecastPoint]:
+        if self.settings.offline_mode:
+            return []
+        try:
+            if self.settings.has_mosmix_station:
+                return MosmixClient(self.settings).fetch_forecasts()
+            if self.settings.has_dwd_station:
+                return DwdClient(self.settings).fetch_forecasts()
+        except Exception:  # noqa: BLE001 - Strunde chat should degrade gracefully.
+            return []
+        return []
 
 
 def build_rain_level_model(
@@ -182,14 +236,16 @@ def _rain_level_pairs(
     response_hours: int,
 ) -> list[tuple[float, float]]:
     ordered_levels = sorted(levels, key=lambda item: item.time)
+    level_times = [item.time for item in ordered_levels]
+    rain_times, rain_totals = _rain_prefix_totals(rain)
     pairs: list[tuple[float, float]] = []
     for base in ordered_levels:
-        future = _nearest_level(ordered_levels, base.time + timedelta(hours=response_hours))
+        future = _nearest_level_at(ordered_levels, level_times, base.time + timedelta(hours=response_hours))
         if future is None:
             continue
         rain_start = base.time - timedelta(hours=lag_hours + rain_window_hours)
         rain_end = base.time - timedelta(hours=lag_hours)
-        rain_sum = sum(_numeric(item.value) for item in rain if rain_start <= item.time < rain_end)
+        rain_sum = _rain_sum_between(rain_times, rain_totals, rain_start, rain_end)
         level_delta = future.value_cm - base.value_cm
         pairs.append((rain_sum, level_delta))
     return pairs
@@ -214,10 +270,49 @@ def _fit_pairs(pairs: list[tuple[float, float]], lag: int, window: int, response
 def _nearest_level(levels: list[StrundeLevelObservation], target: datetime) -> StrundeLevelObservation | None:
     if not levels:
         return None
-    nearest = min(levels, key=lambda item: abs(item.time - target))
+    ordered_levels = sorted(levels, key=lambda item: item.time)
+    level_times = [item.time for item in ordered_levels]
+    return _nearest_level_at(ordered_levels, level_times, target)
+
+
+def _nearest_level_at(
+    levels: list[StrundeLevelObservation],
+    level_times: list[datetime],
+    target: datetime,
+) -> StrundeLevelObservation | None:
+    if not levels:
+        return None
+    index = bisect_left(level_times, target)
+    candidates: list[StrundeLevelObservation] = []
+    if index < len(levels):
+        candidates.append(levels[index])
+    if index > 0:
+        candidates.append(levels[index - 1])
+    nearest = min(candidates, key=lambda item: abs(item.time - target))
     if abs(nearest.time - target) > timedelta(hours=1):
         return None
     return nearest
+
+
+def _rain_prefix_totals(rain: list[LocalObservation]) -> tuple[list[datetime], list[float]]:
+    ordered = sorted((item.time, _numeric(item.value)) for item in rain)
+    times: list[datetime] = []
+    totals = [0.0]
+    for timestamp, value in ordered:
+        times.append(timestamp)
+        totals.append(totals[-1] + value)
+    return times, totals
+
+
+def _rain_sum_between(
+    rain_times: list[datetime],
+    rain_totals: list[float],
+    start: datetime,
+    end: datetime,
+) -> float:
+    left = bisect_left(rain_times, start)
+    right = bisect_left(rain_times, end)
+    return rain_totals[right] - rain_totals[left]
 
 
 def _missing_level_answer() -> str:
@@ -239,6 +334,40 @@ def _model_context_line(model: RainLevelModel) -> str:
         f"Korrelation {model.correlation:.2f} bei {model.lag_hours} h Verzoegerung "
         f"auf Basis von {model.samples} Vergleichspunkten."
     )
+
+
+def _latest_forecasts_by_valid_time(forecasts: list[ForecastPoint]) -> list[ForecastPoint]:
+    latest: dict[datetime, ForecastPoint] = {}
+    for forecast in forecasts:
+        current = latest.get(forecast.valid_at)
+        if current is None or forecast.issued_at > current.issued_at:
+            latest[forecast.valid_at] = forecast
+    return sorted(latest.values(), key=lambda item: item.valid_at)
+
+
+def _forecast_run_is_stale(forecasts: list[ForecastPoint], now: datetime) -> bool:
+    latest_issue = max((item.issued_at for item in forecasts), default=None)
+    if latest_issue is None:
+        return True
+    return latest_issue < now - timedelta(hours=12)
+
+
+def _heuristic_level_range(current_level: float, expected_rain: float) -> tuple[float, float, str]:
+    rain = max(0.0, expected_rain)
+    if rain <= 0.5:
+        return max(0.0, current_level - 1.0), current_level + 1.0, "weitgehend stabil"
+    if rain <= 5.0:
+        return current_level, current_level + 5.0, "leicht steigend"
+    if rain <= 15.0:
+        return current_level + 2.0, current_level + 15.0, "spuerbar steigend"
+    return current_level + 5.0, current_level + 30.0, "deutlich steigend"
+
+
+def _stale_level_line(value: datetime) -> str | None:
+    age_seconds = (datetime.now(timezone.utc) - value.astimezone(timezone.utc)).total_seconds()
+    if age_seconds <= 24 * 60 * 60:
+        return None
+    return "Hinweis: Der letzte Strunde-Pegelwert ist aelter als 24 Stunden."
 
 
 def _numeric(value) -> float:
